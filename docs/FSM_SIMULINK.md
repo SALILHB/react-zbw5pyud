@@ -103,11 +103,25 @@ URGENCE_ATEX (déjà présent, vide → entry ajoutée + transition retour ajout
 `MODE_GPL`** : Stateflow ne permet pas de « partager » littéralement une
 région d'états entre deux super-états sans passer par une bibliothèque de
 composants (hors périmètre ici). La duplication des **boîtes d'état** est
-donc inévitable, mais la **logique** reste factorisée : les deux
-sous-machines appellent les mêmes fonctions graphiques
-`gerer_palier()`, `appliquer_palier()`, `fermer_gaz()` — c'est exactement
-l'équivalent Stateflow de `gererCombustion()` dans le firmware, qui est
-partagée par les deux modes via un paramètre booléen `utilise_h2`.
+donc inévitable. Le pseudocode ci-dessous décrit la logique sous forme de
+fonctions (`gerer_palier()`, `appliquer_palier()`, `fermer_gaz()`,
+`calculer_seuils()`) pour la lisibilité — c'est l'équivalent conceptuel de
+`gererCombustion()` dans le firmware, partagée par les deux modes via un
+paramètre booléen `utilise_h2`.
+>
+> **Correction suite à un test réel (`matlab/completer_fsm_sechoir.m`)** :
+> la classe `Stateflow.EMLFunction`, censée porter ces fonctions comme de
+> véritables objets Stateflow réutilisables, s'est révélée indisponible
+> dans la version de MATLAB testée (`Unable to resolve the name
+> 'Stateflow.EMLFunction.empty'`). Le script généré **inline donc
+> directement le corps de chaque fonction** dans chaque action d'état/
+> transition qui l'utilise, dans `MODE_H2` *et* dans `MODE_GPL` — la
+> factorisation reste réelle **au niveau de la spécification et du texte
+> du mémoire** (une seule logique décrite ici), mais pas au niveau du
+> fichier `.slx` généré, où le texte est dupliqué. C'est une limitation
+> de l'outillage Stateflow rencontrée en pratique, pas un choix de
+> conception ; à mentionner si le mémoire discute de la maintenabilité du
+> modèle.
 
 ### 3.1 Sous-machine de combustion (identique dans MODE_H2 et MODE_GPL)
 
@@ -129,16 +143,16 @@ ALLUMAGE
       { }                                            % échec de BASCULEMENT : escalade immédiate
   → PURGE
       [after(Temps_Allumage, sec) && Flame==0 && raison_purge~=2 && nb_echecs_allumage < MAX_ECHECS]
-      { nb_echecs_allumage++; raison_purge=1; }
+      { nb_echecs_allumage=nb_echecs_allumage+1; raison_purge=1; }
   → ERREUR_COMBUSTION
       [after(Temps_Allumage, sec) && Flame==0 && nb_echecs_allumage >= MAX_ECHECS]
-      { nb_echecs_allumage++; }
+      { nb_echecs_allumage=nb_echecs_allumage+1; }
 
 REGULATION
   during: gerer_palier();     % hystérésis 4 niveaux, cf. §4.1 — mémorisée par `palier`
   → PURGE
       [Flame == 0]
-      { nb_echecs_allumage++; raison_purge=1; }        % perte de flamme inattendue
+      { nb_echecs_allumage=nb_echecs_allumage+1; raison_purge=1; }        % perte de flamme inattendue
   → ERREUR_COMBUSTION
       [Flame == 0 && nb_echecs_allumage >= MAX_ECHECS]
   → PURGE

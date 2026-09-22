@@ -2,7 +2,16 @@
 %
 % Complete le chart Stateflow "FSM/Chart" du modele Commande_Sechoir_Hybride
 % via l'API Stateflow officielle (Stateflow.State, Stateflow.Transition,
-% Stateflow.Data, Stateflow.EMLFunction) -- aucune edition manuelle du XML.
+% Stateflow.Data) -- aucune edition manuelle du XML.
+%
+% NOTE (corrige suite a un test reel) : la version initiale essayait de
+% factoriser gerer_palier()/appliquer_palier()/fermer_gaz()/calculer_seuils()
+% via Stateflow.EMLFunction, classe indisponible dans certaines versions de
+% MATLAB ("Unable to resolve the name 'Stateflow.EMLFunction.empty'"). Cette
+% version inline directement la logique dans chaque action d'etat/transition
+% (duplication assumee entre MODE_H2 et MODE_GPL, cf. docs/FSM_SIMULINK.md
+% §3, note sur la duplication) -- ne repose plus que sur Stateflow.State,
+% Stateflow.Transition et Stateflow.Data, deja confirmes fonctionnels.
 %
 % CE SCRIPT N'A PAS ETE EXECUTE NI VERIFIE DANS UNE VRAIE SESSION MATLAB
 % (environnement de developpement sans MATLAB/Simulink). Executez-le avec
@@ -40,7 +49,6 @@ function completer_fsm_sechoir(modelName)
     fprintf('=== Completion du chart : %s ===\n', chart.Path);
 
     ajouterDonnees(chart);
-    ajouterFonctions(chart);
     completerEtatsSimples(chart);
     % ERREUR_COMBUSTION doit exister AVANT les sous-machines de combustion :
     % celles-ci y creent des transitions (echec de basculement, echecs
@@ -104,15 +112,46 @@ function d = trouverDonnee(chart, nom)
     end
 end
 
-function f = trouverFonction(chart, nom)
-    f = Stateflow.EMLFunction.empty;
-    fonctions = chart.find('-isa', 'Stateflow.EMLFunction');
-    for i = 1:numel(fonctions)
-        if strcmp(fonctions(i).Name, nom)
-            f = fonctions(i);
-            return;
-        end
-    end
+% --- Logique partagee, inlinee (voir note en tete de fichier) ---
+% Utilisee a plusieurs endroits (etats + transitions) plutot que factorisee
+% en fonction Stateflow, pour eviter toute dependance a une classe d'API
+% indisponible selon la version de MATLAB.
+
+function s = txtFermerGaz()
+    s = 'V_H2=uint8(0); V_But=uint8(0); V_Fl_1=uint8(0); V_Fl_2=uint8(0); V_Fl_3=uint8(0); Spark=uint8(0);';
+end
+
+function s = txtAppliquerPalier()
+    s = 'V_Fl_1=uint8(palier==0); V_Fl_2=uint8(palier==0||palier==1); V_Fl_3=uint8(palier~=3);';
+end
+
+function s = txtCalculerSeuils()
+    s = ['ECART_MIN=3; if T_cible<=T_init+ECART_MIN, T1_seuil=T_cible; T2_seuil=T_cible; T3_seuil=T_cible; ' ...
+         'else delta=T_cible-T_init; T1_seuil=T_init+delta/3; T2_seuil=T_init+2*delta/3; T3_seuil=T_cible; end'];
+end
+
+function s = txtGererPalier()
+    s = sprintf([ ...
+        'demi=Hhyst/2;\n' ...
+        'switch palier\n' ...
+        '  case 0\n' ...
+        '    if T_sec >= T1_seuil + demi, palier = uint8(1); end\n' ...
+        '  case 1\n' ...
+        '    if T_sec >= T2_seuil + demi\n' ...
+        '      palier = uint8(2);\n' ...
+        '    elseif T_sec < T1_seuil - demi\n' ...
+        '      palier = uint8(0);\n' ...
+        '    end\n' ...
+        '  case 2\n' ...
+        '    if T_sec >= T3_seuil + demi\n' ...
+        '      palier = uint8(3);\n' ...
+        '    elseif T_sec < T2_seuil - demi\n' ...
+        '      palier = uint8(1);\n' ...
+        '    end\n' ...
+        'end\n' ...
+        'if palier ~= 3\n' ...
+        '  %s\n' ...
+        'end'], txtAppliquerPalier());
 end
 
 function transitionExiste = existeTransition(chart, srcNom, dstNom, condition)
@@ -179,88 +218,19 @@ function ajouterDonnees(chart)
 end
 
 %% ------------------------------------------------------------------
-%  2. Fonctions partagees (equivalent de gererCombustion() factorisee)
-%  ------------------------------------------------------------------
-
-function ajouterFonctions(chart)
-    fprintf('--- Fonctions partagees ---\n');
-
-    ajouterFonctionSiAbsente(chart, 'calculer_seuils', [ ...
-        'function calculer_seuils()\n' ...
-        '  ECART_MIN = 3;\n' ...
-        '  if T_cible <= T_init + ECART_MIN\n' ...
-        '    T1_seuil = T_cible; T2_seuil = T_cible; T3_seuil = T_cible;\n' ...
-        '  else\n' ...
-        '    delta = T_cible - T_init;\n' ...
-        '    T1_seuil = T_init + delta/3;\n' ...
-        '    T2_seuil = T_init + 2*delta/3;\n' ...
-        '    T3_seuil = T_cible;\n' ...
-        '  end\n' ...
-        'end']);
-
-    ajouterFonctionSiAbsente(chart, 'appliquer_palier', [ ...
-        'function appliquer_palier()\n' ...
-        '  V_Fl_1 = uint8(palier == 0);\n' ...
-        '  V_Fl_2 = uint8(palier == 0 || palier == 1);\n' ...
-        '  V_Fl_3 = uint8(palier ~= 3);\n' ...
-        'end']);
-
-    ajouterFonctionSiAbsente(chart, 'gerer_palier', [ ...
-        'function gerer_palier()\n' ...
-        '  demi = Hhyst/2;\n' ...
-        '  switch palier\n' ...
-        '    case 0\n' ...
-        '      if T_sec >= T1_seuil + demi, palier = 1; end\n' ...
-        '    case 1\n' ...
-        '      if T_sec >= T2_seuil + demi\n' ...
-        '        palier = 2;\n' ...
-        '      elseif T_sec < T1_seuil - demi\n' ...
-        '        palier = 0;\n' ...
-        '      end\n' ...
-        '    case 2\n' ...
-        '      if T_sec >= T3_seuil + demi\n' ...
-        '        palier = 3;\n' ...
-        '      elseif T_sec < T2_seuil - demi\n' ...
-        '        palier = 1;\n' ...
-        '      end\n' ...
-        '  end\n' ...
-        '  if palier ~= 3\n' ...
-        '    appliquer_palier();\n' ...
-        '  end\n' ...
-        'end']);
-
-    ajouterFonctionSiAbsente(chart, 'fermer_gaz', [ ...
-        'function fermer_gaz()\n' ...
-        '  V_H2 = uint8(0); V_But = uint8(0);\n' ...
-        '  V_Fl_1 = uint8(0); V_Fl_2 = uint8(0); V_Fl_3 = uint8(0);\n' ...
-        '  Spark = uint8(0);\n' ...
-        'end']);
-end
-
-function ajouterFonctionSiAbsente(chart, nom, script)
-    if ~isempty(trouverFonction(chart, nom))
-        fprintf('  [deja presente] %s()\n', nom);
-        return;
-    end
-    f = Stateflow.EMLFunction(chart);
-    f.Name = nom;
-    f.Script = sprintf(script);
-    fprintf('  [ajoutee] %s()\n', nom);
-end
-
-%% ------------------------------------------------------------------
 %  3. Etats simples : entry: uniquement (voir docs/FSM_SIMULINK.md §3.3)
 %  ------------------------------------------------------------------
 
 function completerEtatsSimples(chart)
     fprintf('--- Actions des etats simples ---\n');
+    fg = txtFermerGaz();
     specs = {
-        'ATTENTE_DEMARRAGE', 'fermer_gaz(); PWM_Purge=uint8(0); PWM_Inj=uint8(0); PWM_Ext=uint8(0); Buzzer=uint8(0); Etat_LCD=uint8(0);'
-        'MODE_SOLAIRE',      'fermer_gaz(); PWM_Purge=uint8(0); PWM_Inj=uint8(220); PWM_Ext=uint8(150); Etat_LCD=uint8(2);'
+        'ATTENTE_DEMARRAGE', [fg ' PWM_Purge=uint8(0); PWM_Inj=uint8(0); PWM_Ext=uint8(0); Buzzer=uint8(0); Etat_LCD=uint8(0);']
+        'MODE_SOLAIRE',      [fg ' PWM_Purge=uint8(0); PWM_Inj=uint8(220); PWM_Ext=uint8(150); Etat_LCD=uint8(2);']
         'PROLONGATION',      'Etat_LCD=uint8(5);'
         'FIN_TEMPORISATION', 'Etat_LCD=uint8(6);'
-        'SECHAGE_TERMINE',   'fermer_gaz(); PWM_Purge=uint8(0); PWM_Inj=uint8(0); PWM_Ext=uint8(90);'
-        'URGENCE_ATEX',      'fermer_gaz(); PWM_Purge=uint8(255); PWM_Inj=uint8(0); PWM_Ext=uint8(255); Buzzer=uint8(1); Etat_LCD=uint8(9);'
+        'SECHAGE_TERMINE',   [fg ' PWM_Purge=uint8(0); PWM_Inj=uint8(0); PWM_Ext=uint8(90);']
+        'URGENCE_ATEX',      [fg ' PWM_Purge=uint8(255); PWM_Inj=uint8(0); PWM_Ext=uint8(255); Buzzer=uint8(1); Etat_LCD=uint8(9);']
     };
     for i = 1:size(specs, 1)
         nom = specs{i, 1}; entryAction = specs{i, 2};
@@ -311,8 +281,7 @@ function ajouterSousMachineCombustion(chart, nomParent)
     if isempty(purge)
         purge = Stateflow.State(parent);
         purge.Position = [20 40 100 60];
-        purge.LabelString = sprintf(['PURGE\n' ...
-            'entry: fermer_gaz(); Spark=uint8(0); PWM_Purge=uint8(255); PWM_Inj=uint8(60); PWM_Ext=uint8(200);']);
+        purge.LabelString = sprintf('PURGE\nentry: %s Spark=uint8(0); PWM_Purge=uint8(255); PWM_Inj=uint8(60); PWM_Ext=uint8(200);', txtFermerGaz());
         fprintf('  [ajoute] PURGE\n');
     else
         fprintf('  [deja present] PURGE\n');
@@ -322,8 +291,7 @@ function ajouterSousMachineCombustion(chart, nomParent)
     if isempty(allumage)
         allumage = Stateflow.State(parent);
         allumage.Position = [140 40 100 60];
-        allumage.LabelString = sprintf(['ALLUMAGE\n' ...
-            'entry: %s appliquer_palier(); Spark=uint8(1);'], actionVanne);
+        allumage.LabelString = sprintf('ALLUMAGE\nentry: %s %s Spark=uint8(1);', actionVanne, txtAppliquerPalier());
         fprintf('  [ajoute] ALLUMAGE\n');
     else
         fprintf('  [deja present] ALLUMAGE\n');
@@ -333,9 +301,7 @@ function ajouterSousMachineCombustion(chart, nomParent)
     if isempty(regulation)
         regulation = Stateflow.State(parent);
         regulation.Position = [260 40 100 60];
-        regulation.LabelString = sprintf(['REGULATION\n' ...
-            'entry: %s\n' ...
-            'during: gerer_palier();'], actionVanne);
+        regulation.LabelString = sprintf('REGULATION\nentry: %s\nduring: %s', actionVanne, txtGererPalier());
         fprintf('  [ajoute] REGULATION\n');
     else
         fprintf('  [deja present] REGULATION\n');
@@ -373,7 +339,7 @@ function ajouterSousMachineCombustion(chart, nomParent)
 
     % ALLUMAGE -> PURGE (echec ordinaire, sous le seuil d''escalade)
     condEchecOrdinaire = ['[after(Temps_Allumage, sec) && Flame == 0 && raison_purge ~= 2 && nb_echecs_allumage < MAX_ECHECS]' ...
-        '{nb_echecs_allumage++; raison_purge=uint8(1);}'];
+        '{nb_echecs_allumage=nb_echecs_allumage+uint16(1); raison_purge=uint8(1);}'];
     if ~existeTransition(chart, 'ALLUMAGE', 'PURGE', condEchecOrdinaire)
         t = Stateflow.Transition(chart);
         t.Source = allumage; t.Destination = purge;
@@ -382,11 +348,11 @@ function ajouterSousMachineCombustion(chart, nomParent)
     end
 
     % ALLUMAGE -> ERREUR_COMBUSTION (echecs repetes)
-    condEchecRepete = '[after(Temps_Allumage, sec) && Flame == 0 && nb_echecs_allumage >= MAX_ECHECS]{nb_echecs_allumage++;}';
+    condEchecRepete = '[after(Temps_Allumage, sec) && Flame == 0 && nb_echecs_allumage >= MAX_ECHECS]{nb_echecs_allumage=nb_echecs_allumage+uint16(1);}';
     creerTransitionVersErreur(chart, allumage, condEchecRepete, 'AllumageEchecRepete');
 
     % REGULATION -> PURGE (perte de flamme inattendue)
-    condPerteFlamme = '[Flame == 0 && nb_echecs_allumage < MAX_ECHECS]{nb_echecs_allumage++; raison_purge=uint8(1);}';
+    condPerteFlamme = '[Flame == 0 && nb_echecs_allumage < MAX_ECHECS]{nb_echecs_allumage=nb_echecs_allumage+uint16(1); raison_purge=uint8(1);}';
     if ~existeTransition(chart, 'REGULATION', 'PURGE', condPerteFlamme)
         t = Stateflow.Transition(chart);
         t.Source = regulation; t.Destination = purge;
@@ -395,7 +361,7 @@ function ajouterSousMachineCombustion(chart, nomParent)
     end
 
     % REGULATION -> ERREUR_COMBUSTION (perte de flamme + echecs repetes)
-    condPerteFlammeRepete = '[Flame == 0 && nb_echecs_allumage >= MAX_ECHECS]{nb_echecs_allumage++;}';
+    condPerteFlammeRepete = '[Flame == 0 && nb_echecs_allumage >= MAX_ECHECS]{nb_echecs_allumage=nb_echecs_allumage+uint16(1);}';
     creerTransitionVersErreur(chart, regulation, condPerteFlammeRepete, 'RegulationPerteFlammeRepete');
 
     % REGULATION -> PURGE (consigne atteinte : coupure volontaire)
@@ -436,9 +402,7 @@ function ajouterEtatErreurCombustion(chart)
     end
     err = Stateflow.State(fn);
     err.Position = [700 200 120 70];
-    err.LabelString = sprintf(['ERREUR_COMBUSTION\n' ...
-        'entry: fermer_gaz(); Buzzer=uint8(1); PWM_Purge=uint8(255); Choix_Erreur=uint8(0);\n' ...
-        'during: if Btn_SELECT==1, Choix_Erreur = mod(Choix_Erreur+1, uint8(3)); end']);
+    err.LabelString = sprintf('ERREUR_COMBUSTION\nentry: %s Buzzer=uint8(1); PWM_Purge=uint8(255); Choix_Erreur=uint8(0);\nduring: if Btn_SELECT==1, Choix_Erreur = mod(Choix_Erreur+1, uint8(3)); end', txtFermerGaz());
     fprintf('  [ajoute] ERREUR_COMBUSTION\n');
 
     % Retour vers MODE_H2 ou MODE_GPL (REESSAYER ou AUTOMATIQUE)
@@ -469,7 +433,7 @@ function ajouterEtatErreurCombustion(chart)
         fprintf('  [transition] ERREUR_COMBUSTION -> ATTENTE_DEMARRAGE (manuel)\n');
     end
 
-    condStop = '[Btn_Stop==1]{Buzzer=uint8(0); fermer_gaz();}';
+    condStop = sprintf('[Btn_Stop==1]{Buzzer=uint8(0); %s}', txtFermerGaz());
     termine = trouverEtat(chart, 'SECHAGE_TERMINE');
     if ~isempty(termine) && ~existeTransition(chart, 'ERREUR_COMBUSTION', 'SECHAGE_TERMINE', condStop)
         t = Stateflow.Transition(chart);
@@ -511,16 +475,17 @@ function ajouterTransitionsPrioritaires(chart)
     end
 
     % 2. Btn_Stop -> SECHAGE_TERMINE
-    condStop = '[in(MODE_SOLAIRE)||in(MODE_H2)||in(MODE_GPL)||in(PROLONGATION)||in(FIN_TEMPORISATION)) && Btn_Stop==1]{fermer_gaz();}';
+    % (parenthese d'ouverture manquante corrigee ici : "(in(...)||...||in(...))")
+    condStop = sprintf('[(in(MODE_SOLAIRE)||in(MODE_H2)||in(MODE_GPL)||in(PROLONGATION)||in(FIN_TEMPORISATION)) && Btn_Stop==1]{%s}', txtFermerGaz());
     ajouterTransitionBordSiAbsente(chart, fn, termine, condStop, 'Btn_Stop');
 
     % 3. Surchauffe -> SECHAGE_TERMINE
-    condSurchauffe = '[(in(MODE_SOLAIRE)||in(MODE_H2)||in(MODE_GPL)||in(PROLONGATION)||in(FIN_TEMPORISATION)) && T_sec >= 90]{fermer_gaz();}';
+    condSurchauffe = sprintf('[(in(MODE_SOLAIRE)||in(MODE_H2)||in(MODE_GPL)||in(PROLONGATION)||in(FIN_TEMPORISATION)) && T_sec >= 90]{%s}', txtFermerGaz());
     ajouterTransitionBordSiAbsente(chart, fn, termine, condSurchauffe, 'Surchauffe');
 
     % 4. Plafond Temps_Prolongation -> SECHAGE_TERMINE (arret force)
     if ~isempty(prolongation)
-        condPlafond = '[after(Tps_Prolongation, sec)]{arret_force_duree=uint8(1); fermer_gaz();}';
+        condPlafond = sprintf('[after(Tps_Prolongation, sec)]{arret_force_duree=uint8(1); %s}', txtFermerGaz());
         if ~existeTransition(chart, 'PROLONGATION', 'SECHAGE_TERMINE', condPlafond)
             t = Stateflow.Transition(chart);
             t.Source = prolongation; t.Destination = termine;
@@ -536,14 +501,14 @@ function ajouterTransitionsPrioritaires(chart)
         ajouterTransitionBordSiAbsente(chart, fn, finTempo, condFin, 'FinDeCycle');
 
         % Confirmation / report / arret auto depuis FIN_TEMPORISATION
-        condConfirme = '[Btn_OK==1 || Btn_Stop==1]{fermer_gaz();}';
+        condConfirme = sprintf('[Btn_OK==1 || Btn_Stop==1]{%s}', txtFermerGaz());
         if ~existeTransition(chart, 'FIN_TEMPORISATION', 'SECHAGE_TERMINE', condConfirme)
             t = Stateflow.Transition(chart);
             t.Source = finTempo; t.Destination = termine;
             t.LabelString = condConfirme;
             fprintf('  [transition] FIN_TEMPORISATION -> SECHAGE_TERMINE (confirmation)\n');
         end
-        condAutoStop = '[after(Temps_Arret_Auto, sec)]{fermer_gaz();}';
+        condAutoStop = sprintf('[after(Temps_Arret_Auto, sec)]{%s}', txtFermerGaz());
         if ~existeTransition(chart, 'FIN_TEMPORISATION', 'SECHAGE_TERMINE', condAutoStop)
             t = Stateflow.Transition(chart);
             t.Source = finTempo; t.Destination = termine;
@@ -607,13 +572,14 @@ function ajouterTransitionsArbitrage(chart)
     ajouterTransitionSiAbsente(chart, attente, gpl, condManuelGpl, 'ManuelGPL');
 
     % Depuis ATTENTE_DEMARRAGE : automatique
-    condAutoSolaire = '[Btn_Start==1 && Mode_Auto==1 && T_cap>=Seuil_Tcap_ON]{T_init=T_sec; calculer_seuils();}';
+    cs = txtCalculerSeuils();
+    condAutoSolaire = sprintf('[Btn_Start==1 && Mode_Auto==1 && T_cap>=Seuil_Tcap_ON]{T_init=T_sec; %s}', cs);
     ajouterTransitionSiAbsente(chart, attente, solaire, condAutoSolaire, 'AutoSolaire');
 
-    condAutoH2 = '[Btn_Start==1 && Mode_Auto==1 && T_cap<Seuil_Tcap_OFF && Press_H2>=Press_H2_Min]{T_init=T_sec; calculer_seuils(); palier=uint8(0); raison_purge=uint8(0);}';
+    condAutoH2 = sprintf('[Btn_Start==1 && Mode_Auto==1 && T_cap<Seuil_Tcap_OFF && Press_H2>=Press_H2_Min]{T_init=T_sec; %s palier=uint8(0); raison_purge=uint8(0);}', cs);
     ajouterTransitionSiAbsente(chart, attente, h2, condAutoH2, 'AutoH2');
 
-    condAutoGpl = '[Btn_Start==1 && Mode_Auto==1 && T_cap<Seuil_Tcap_OFF && Press_H2<Press_H2_Min]{T_init=T_sec; calculer_seuils(); palier=uint8(0); raison_purge=uint8(0);}';
+    condAutoGpl = sprintf('[Btn_Start==1 && Mode_Auto==1 && T_cap<Seuil_Tcap_OFF && Press_H2<Press_H2_Min]{T_init=T_sec; %s palier=uint8(0); raison_purge=uint8(0);}', cs);
     ajouterTransitionSiAbsente(chart, attente, gpl, condAutoGpl, 'AutoGPL');
 
     % Retour au solaire depuis H2/GPL

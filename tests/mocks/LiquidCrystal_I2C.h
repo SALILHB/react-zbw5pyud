@@ -1,10 +1,11 @@
 /* Mock de la bibliothèque LiquidCrystal_I2C — banc de tests natif.
- * Le contenu affiché est relu dans mock_lcd_lignes[0..1]. */
+ * Le contenu affiché est relu dans mock_lcd_lignes[0..3] (écran 20x4). */
 #pragma once
 #include <stdint.h>
 #include <string>
 
-extern std::string mock_lcd_lignes[2];
+const uint8_t NB_LIGNES_LCD_MOCK = 4;
+extern std::string mock_lcd_lignes[NB_LIGNES_LCD_MOCK];
 
 class LiquidCrystal_I2C {
 public:

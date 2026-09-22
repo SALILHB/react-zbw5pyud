@@ -1,207 +1,283 @@
-# Séchoir solaire hybride — Synthèse de la machine à états finis
+# Séchoir solaire hybride — Synthèse de la machine à états finis (v2)
 
-Document d'accompagnement du programme `sechoir_hybride/sechoir_hybride.ino`.
-Les références `§x` renvoient au cahier des charges.
+Document d'accompagnement de `sechoir_hybride/sechoir_hybride.ino`.
+Cette version 2 répond au second cahier des charges reçu, qui **révise
+plusieurs règles du premier** (voir §1 « Avis critiques »). Les références
+`§x` renvoient à ce second cahier des charges ; `§x v1` renvoie au premier
+(toujours pertinent pour les points qu'il n'a pas révisés).
 
 ---
 
-## 1. Tableau de synthèse — États principaux (§7.1)
+## 1. Avis critiques sur le cahier des charges v2
+
+Ces remarques ont été formulées **avant** l'implémentation et communiquées à
+l'opérateur, qui a tranché les points bloquants (voir décisions ci-dessous).
+Elles sont reproduites ici pour la traçabilité du mémoire.
+
+### 1.1 Le palier 0 % réintroduit le risque que le v1 interdisait
+
+Le premier cahier des charges interdisait explicitement un palier 0 % : *« Ce
+choix élimine par construction les cycles répétés d'extinction/rallumage »*.
+Le second l'exige. Conséquence directe et **assumée** : puisque toute
+réouverture de gaz exige une purge complète (§8), repasser de 0 % à 33 % à
+chaque fois que `T_sec` redescend sous le seuil implique un cycle complet
+purge → allumage. Autour d'une consigne stable, cela peut se produire
+plusieurs fois par heure : usure de l'allumeur, gaz consommé en pure
+ventilation, et une coupure de chauffe pendant toute la durée de la purge à
+chaque réamorçage.
+
+**Mitigation ajoutée, au-delà de la lettre du cahier des charges** : après la
+purge consécutive à une coupure au palier 0 %, le programme **revérifie la
+température avant de rouvrir le gaz** (voir `gererCombustion()`, cas
+`PH_PURGE` avec `raison_purge == PURGE_PALIER_0`). Si la demande de 33 % n'est
+plus là, on ne gaspille pas un allumage : le système reste en veille, gaz
+fermé, ventilation active, et revérifie à chaque itération. Le rallumage se
+fait alors directement au palier 33 % (jamais 100 %), cohérent avec le sens
+des transitions du §4.
+
+### 1.2 Deux contradictions internes au cahier des charges v2
+
+- **`Temps_Prolongation`** apparaît dans la liste des paramètres de
+  configuration (§17), alors que le v1 imposait explicitement l'absence de
+  toute limite de temps pour `PROLONGATION` (*« elle dure jusqu'à H_fin, sans
+  nouvelle limite »*). **Décision de l'opérateur (validée avant
+  implémentation) : ajouter le plafond.** Conséquence assumée : le cycle peut
+  se terminer sans que l'humidité cible soit atteinte. Le programme le
+  signale sans ambiguïté (`arret_force_duree`, affiché en toutes lettres sur
+  l'écran de fin de cycle : *« ARRET FORCE (duree) / Humidite non
+  garantie »*), pour qu'aucun opérateur ne confonde une fin normale et une fin
+  forcée.
+
+- **« `T_sec` atteint durablement `T_cible` »** comme déclencheur de fin de
+  cycle (§6) est risqué pris littéralement : une fois la régulation stabilisée
+  (souvent en moins d'une heure), le séchoir passe le plus clair du cycle à
+  `T_cible` — bien avant que le produit soit sec. **Interprétation retenue,
+  volontairement restrictive** : ce critère est verrouillé par le même
+  `Temps_Min_Fin` que le critère hygrométrique, et concrétisé par « palier 0 %
+  maintenu depuis au moins 60 s » (`CONFIRMATION_PALIER_0_MS`), qui est
+  précisément le moment où la régulation décide que la consigne est atteinte.
+  Voir `conditionFinDeCycle()`.
+
+### 1.3 `H_initial` reste sans usage dans le calcul de fin de cycle
+
+Le cahier des charges v2 réintroduit `H_initial` (supprimée dans le v1 comme
+« non utilisée par la commande ») et donne pourtant la même formule
+`H_fin = H_produit_cible + H_amb`, qui ne s'en sert pas — y compris dans son
+propre exemple chiffré (80 % cité mais absent du calcul). `H_initial` est donc
+implémentée comme **paramètre saisi, affiché et sauvegardé, mais purement
+informatif/journal** (traçabilité produit pour le mémoire), sans effet sur la
+décision de fin de cycle. Si une pondération par l'humidité initiale est
+souhaitée (ex. un critère relatif « % d'humidité retirée »), c'est une
+évolution de formule à spécifier séparément — elle n'a pas été inventée ici.
+
+### 1.4 Échecs d'allumage répétés hors basculement
+
+Le cahier des charges v2 n'exige l'écran d'erreur avec menu
+RÉESSAYER/MANUEL/AUTOMATIQUE (§13) que pour un **échec de basculement**. Pour
+un échec d'allumage ordinaire (démarrage à froid, ou nouvelle tentative après
+perte de flamme), rien n'est dit sur une éventuelle limite — la lecture
+littérale autoriserait donc une boucle purge → allumage → échec indéfinie.
+**Ajout de sécurité (au-delà du texte)** : après `MAX_ECHECS_AVANT_ALARME` (3)
+échecs consécutifs, quelle qu'en soit la cause, la même escalade est
+déclenchée (`entrerErreurCombustion(ERR_ALLUMAGE_REPETE)`). Un basculement raté
+déclenche toujours l'escalade dès le premier échec, conformément au texte.
+
+### 1.5 Retour automatique GPL → H2
+
+Le §11 ne décrit explicitement que le sens H2 → GPL, en demandant que « la
+même logique fonctionne dans l'autre sens ». Puisque le §2 établit H2
+prioritaire sur le GPL (« secours uniquement »), un retour automatique dès que
+la pression H2 redevient suffisante est l'extension la plus cohérente avec
+cette hiérarchie — **ajoutée** dans `arbitrageSource()`, avec une marge de
+0,5 bar au-dessus de `Press_H2_Min` pour éviter un aller-retour de source au
+voisinage immédiat du seuil.
+
+### 1.6 Sécurité des paramètres de purge/allumage/fuite
+
+Le §7 demande que la durée de purge, le délai d'allumage et les seuils MQ8/MQ6
+soient éditables au menu opérateur. Les rendre éditables **sans aucune
+limite** permettrait de réduire la purge à quasiment rien, ce qui annule sa
+fonction de sécurité. **Défense en profondeur ajoutée** : chaque champ reste
+modifiable comme demandé, mais borné par une plage sûre non contournable
+(`bornerConfig()`, appelée après chaque édition et après tout chargement
+EEPROM) — par exemple, la purge ne peut pas descendre sous 60 s quel que soit
+le réglage opérateur. **Recommandation non implémentée** (changement
+d'architecture trop lourd pour ce lot) : séparer ces réglages de sécurité dans
+un menu technique protégé (séquence de déverrouillage dédiée), distinct du
+menu de conduite quotidien.
+
+---
+
+## 2. Tableau de synthèse — États principaux
 
 | État | Rôle | Actions (sorties) | Transitions sortantes |
 |---|---|---|---|
-| `ATTENTE_DEMARRAGE` | État initial et état de repli après réarmement | `V_H2`=`V_But`=`EV1`=`EV2`=`EV3`=`Spark`=0 ; `PWM_Purge`/`Distrib`/`Extract` = 0/0/0 ; `Buzzer`=0 | `Btn_Menu` → `CONFIG_MENU`<br>`Btn_Start` → `demarrerCycle()` → `MODE_SOLAIRE`/`MODE_H2`/`MODE_GPL`<br>cause ATEX → `URGENCE_ATEX` |
-| `CONFIG_MENU` | Saisie des consignes sur LCD 16×2 + 4 boutons | Toutes sorties gaz fermées ; PWM 0/0/0 | `Btn_OK` (hors champ Réarmement) → `ATTENTE_DEMARRAGE`<br>`Btn_Start` → démarrage de cycle<br>cause ATEX → `URGENCE_ATEX` |
-| `MODE_SOLAIRE` | Séchage **purement passif** : aucune électrovanne (§2, §12) | Gaz fermé ; `PWM_Purge`=0, `Distrib`=220 (élevé), `Extract`=150 (moyen) ; purge ré-armée en permanence | auto & `T_cap < 45 °C` → combustion, **démarrage à froid palier 100 %** + purge 120 s<br>`H_extr ≤ H_fin` → `SECHAGE_TERMINE`<br>`chrono_cycle > Duree_Max_Cycle` → `PROLONGATION`<br>`Btn_Stop` → `SECHAGE_TERMINE`<br>cause ATEX → `URGENCE_ATEX` |
-| `MODE_H2` | Combustion hydrogène (priorité 2) — sous-phases §7.2 | `gererCombustion(true)` : `V_H2`=1 hors purge, `V_But`=0 ; `EV1/2/3` selon `palier` ; PWM selon phase | auto & `T_cap ≥ 55 °C` → `MODE_SOLAIRE`<br>auto & `Press_H2 < 2 bar` → `MODE_GPL` (**palier conservé**, purge 120 s)<br>`H_extr ≤ H_fin` → `SECHAGE_TERMINE`<br>durée max → `PROLONGATION`<br>`Btn_Stop` → `SECHAGE_TERMINE`<br>cause ATEX → `URGENCE_ATEX` |
-| `MODE_GPL` | Combustion GPL de secours (priorité 3) — **même code** que H₂ | `gererCombustion(false)` : `V_But`=1 hors purge, `V_H2`=0 ; reste identique à `MODE_H2` | auto & `T_cap ≥ 55 °C` → `MODE_SOLAIRE`<br>idem `MODE_H2` pour la fin de cycle, la prolongation, l'arrêt et l'urgence |
-| `PROLONGATION` | Durée max dépassée sans atteindre `H_fin` (§6) | Régulation poursuivie **sans rupture** sur `Source_Active` : ni nouvelle purge, ni retour à 100 % | `H_extr ≤ H_fin` → `SECHAGE_TERMINE` (**aucune limite de temps**)<br>`Btn_Stop` → `SECHAGE_TERMINE`<br>cause ATEX → `URGENCE_ATEX` |
-| `SECHAGE_TERMINE` | `H_extr ≤ H_fin` atteint, arrêt propre, ou surchauffe | Gaz fermé ; `PWM_Purge`=0, `Distrib`=0, `Extract`=90 (refroidissement) | `Btn_Start` → nouveau cycle<br>`Btn_Menu` → `CONFIG_MENU`<br>après 5 min → `ATTENTE_DEMARRAGE`<br>cause ATEX → `URGENCE_ATEX` |
-| `URGENCE_ATEX` | État **parallèle et prioritaire**, atteignable depuis tout état (§7.4) | Fermeture immédiate de `V_H2`, `V_But`, `EV1/2/3` ; `Spark`=0 ; `PWM_Purge`=255, `Distrib`=0, `Extract`=255 ; `Buzzer`=1 ; message LCD | `Btn_Rearm` **ou** menu « Réarmement » + `Btn_OK`, **uniquement si la cause a disparu** → `ATTENTE_DEMARRAGE` |
+| `ATTENTE_DEMARRAGE` | État initial / repli après réarmement | Tout fermé, PWM à 0 | `Btn_Menu` → `CONFIG_MENU` ; `Btn_Start` → démarrage ; cause ATEX → `URGENCE_ATEX` |
+| `CONFIG_MENU` | Saisie des 16 paramètres opérateur (LCD 20×4 + 4 boutons) | Gaz fermé, PWM à 0 | `Btn_OK` (hors Réarmement) → sauvegarde EEPROM + `ATTENTE_DEMARRAGE` ; `Btn_Start` → démarrage direct |
+| `MODE_SOLAIRE` | Séchage **purement passif** : aucune électrovanne | Gaz fermé ; ventilation dédiée | Solaire insuffisant → combustion (démarrage à froid, 100 %) ; fin de cycle → `FIN_TEMPORISATION` ; durée max → `PROLONGATION` |
+| `MODE_H2` | Combustion hydrogène (priorité 2) | `gererCombustion(true)` | Solaire redisponible → `MODE_SOLAIRE` ; H2 indisponible → bascule GPL ; idem fin de cycle / prolongation |
+| `MODE_GPL` | Combustion GPL (priorité 3), **même code** que H2 | `gererCombustion(false)` | H2 redisponible → bascule H2 ; idem `MODE_H2` |
+| `PROLONGATION` | `Duree_Max_Cycle` dépassée sans critère de fin | Régulation poursuivie sans rupture | Fin de cycle → `FIN_TEMPORISATION` ; **`Temps_Prolongation` dépassé → arrêt forcé direct vers `SECHAGE_TERMINE`** (AVIS §1.2) |
+| `FIN_TEMPORISATION` | Consigne atteinte : confirmation avant arrêt (§6) | Régulation **poursuivie** ; LCD affiche le compte à rebours | `Btn_OK`/`Btn_Stop` → arrêt immédiat ; `Btn_Menu` → report (relance le délai) ; condition disparue → reprise automatique ; délai écoulé → arrêt auto |
+| `SECHAGE_TERMINE` | Cycle terminé (normal ou forcé) | Gaz fermé, extraction faible | `Btn_Start` → nouveau cycle ; `Btn_Menu` → `CONFIG_MENU` ; 5 min → `ATTENTE_DEMARRAGE` |
+| `ERREUR_COMBUSTION` | Basculement raté ou échecs d'allumage répétés (§13) | Gaz fermé, buzzer actif, menu 3 choix | `OK` sur RÉESSAYER/AUTOMATIQUE → nouvelle purge + reprise ; `OK` sur MANUEL → mode manuel + `ATTENTE_DEMARRAGE` ; `Btn_Stop` → `SECHAGE_TERMINE` |
+| `URGENCE_ATEX` | **Parallèle et prioritaire**, accessible depuis tout état (§15) | Fermeture totale, purge à 255, buzzer | Réarmement (bouton **ou** menu), seulement si la cause a disparu → `ATTENTE_DEMARRAGE` |
 
-### Transitions prioritaires (évaluées hors du `switch`, après lui — §7.5)
+### Transitions prioritaires (hors du `switch`, dans cet ordre)
 
-| Rang | Condition | Effet |
-|---|---|---|
-| 1 | `MQ8_H2 > SEUIL_MQ8` **ou** `MQ6_But > SEUIL_MQ6` **ou** `AU_Urgence` | → `URGENCE_ATEX`, toutes sorties écrasées en position de repli, aucune autre transition évaluée |
-| 2 | `Btn_Stop` en cycle | → `SECHAGE_TERMINE`, gaz fermé |
-| 3 | `T_sec ≥ 90 °C` en cycle | → `SECHAGE_TERMINE` (sécurité surchauffe ajoutée, cf. §3 incohérence n°3) |
-| 4 | `H_extr ≤ H_fin` en cycle | → `SECHAGE_TERMINE` |
-| 5 | `t − chrono_cycle ≥ Duree_Max_Cycle` et état ≠ `PROLONGATION` | → `PROLONGATION` |
+1. Cause ATEX (fuite ou AU) → `URGENCE_ATEX`, tout est écrasé.
+2. `Btn_Stop` en cycle → `SECHAGE_TERMINE`.
+3. Surchauffe (`T_sec >= 90 °C`) → `SECHAGE_TERMINE` (indépendant du palier 0 %).
+4. Plafond `Temps_Prolongation` dépassé → arrêt forcé.
+5. Condition de fin de cycle (verrouillée par `Temps_Min_Fin`) → `FIN_TEMPORISATION`.
+6. `Duree_Max_Cycle` dépassée → `PROLONGATION`.
 
 ---
 
-## 2. Tableau de synthèse — Sous-phases de combustion (§7.2)
+## 3. Modulation 100/67/33/0 % (§2, §4)
 
-Fonction unique `gererCombustion(bool utiliseH2)`, partagée par `MODE_H2`, `MODE_GPL`
-et `PROLONGATION`. Seule la vanne source diffère (`V_H2` ↔ `V_But`).
+| Palier | EV1 | EV2 | EV3 | Condition d'entrée (depuis le palier voisin) |
+|---|---|---|---|---|
+| 100 % | 1 | 1 | 1 | Démarrage à froid, ou `T_sec < T1 - Hhyst/2` |
+| 67 % | 0 | 1 | 1 | `T_sec >= T1 + Hhyst/2`, ou `T_sec < T2 - Hhyst/2` |
+| 33 % | 0 | 0 | 1 | `T_sec >= T2 + Hhyst/2`, ou reprise après coupure 0 % |
+| 0 % | 0 | 0 | 0 | `T_sec >= T3 + Hhyst/2` (coupure **volontaire**, pas une panne) |
 
-| Phase | Rôle | Actions | Transitions |
+`T1`, `T2`, `T3` sont calculés par `calculerSeuils()` (équivalent du
+`calculateTemperatureThresholds()` demandé) :
+
+```
+T1 = T_init + (T_cible - T_init) / 3
+T2 = T_init + 2 (T_cible - T_init) / 3
+T3 = T_cible
+```
+
+`T3 = T_cible` est une interprétation (le cahier des charges ne donne pas sa
+formule explicitement, seulement la règle « on coupe quand la consigne est
+atteinte ») — voir §4.3 du code pour la justification complète.
+
+### Séquence d'allumage (H2 et GPL, fonction unique `gererCombustion()`)
+
+```
+PURGE (Temps_Purge)         gaz fermé, Spark=0, ventilation de purge
+   ↓ échéance
+ALLUMAGE (≤ Temps_Allumage) ouverture au palier courant + Spark
+   ├── Flame=1  → PALIER_100/67/33 (selon le palier), compteur d'échecs remis à 0
+   └── Flame=0  → échec :
+         - si la purge en cours était un BASCULEMENT → ERREUR_COMBUSTION direct
+         - sinon, si échecs consécutifs >= 3        → ERREUR_COMBUSTION
+         - sinon                                     → nouvelle PURGE complète
+
+PALIER_100/67/33   régulation par hystérésis
+   ├── Flame=0 inattendue → PURGE (ou ERREUR_COMBUSTION si >=3 échecs)
+   └── majPalier() → PALIER_0 → coupure volontaire, PURGE (raison PALIER_0)
+```
+
+### Basculement H2 ↔ GPL
+
+```
+Étape 1  Fermeture de la source active + des 3 EV (armerPurge(PURGE_BASCULEMENT))
+Étape 2  Purge complète (Temps_Purge) — le PALIER COURANT EST CONSERVÉ
+Étape 3  Fin de purge → ALLUMAGE : ouverture de la nouvelle source + du palier conservé + Spark
+Étape 4  Flame=1 → reprise de la régulation à ce palier
+         Flame=0 (échéance Temps_Allumage) → ERREUR_COMBUSTION immédiat (§13),
+         jamais de boucle silencieuse
+```
+
+Le retour GPL → H2 suit exactement la même séquence, déclenché automatiquement
+dès que `Press_H2 >= Press_H2_Min + 0,5 bar` (marge anti-court-cycle, voir
+Avis §1.5).
+
+---
+
+## 4. Structure de configuration (`Config`, §17)
+
+Tous les paramètres opérateur sont dans une seule structure, sauvegardée en
+EEPROM (mémoire interne du Mega 2560, aucun composant supplémentaire) et
+rechargée au démarrage avec repli sur des valeurs par défaut si l'EEPROM est
+vierge ou invalide (sentinelle de version). Chaque champ est borné après
+édition (`bornerConfig()`), y compris contre une EEPROM partiellement
+corrompue.
+
+| Champ | Unité | Bornes | Sécurité |
 |---|---|---|---|
-| `PURGE` | Balayage obligatoire de 120 s avant toute mise en gaz (§7.3 règle 1) | Tout le gaz fermé, `Spark`=0, `PWM_Purge`=255, `Distrib`=60, `Extract`=200 | `t − chrono_purge ≥ 120 s` → `ALLUMAGE` |
-| `ALLUMAGE` | Mise en gaz **au palier courant** + étincelle, 4 s maximum | Vanne source ouverte, `EV` selon `palier`, `Spark`=1 | `Flame=1` → `PALIER_100` / `PALIER_67` / `PALIER_33` selon `palier`<br>`t − chrono_allumage ≥ 4 s` → fermeture totale → `PURGE` |
-| `PALIER_100` | Pleine puissance | `EV1+EV2+EV3`, `Spark`=0, `Distrib`=255, `Extract`=200 | `T_sec ≥ T1+2,5` → `PALIER_67`<br>`Flame=0` → fermeture immédiate → `PURGE` |
-| `PALIER_67` | ≈ 67 % de puissance | `EV2+EV3`, `Distrib`=210, `Extract`=165 | `T_sec ≥ T2+2,5` → `PALIER_33`<br>`T_sec < T1−2,5` → `PALIER_100`<br>`Flame=0` → `PURGE` |
-| `PALIER_33` | **Plancher** ≈ 33 % — il n'existe pas de palier 0 % (§4.1) | `EV3` seule, `Distrib`=165, `Extract`=130 | `T_sec < T2−2,5` → `PALIER_67`<br>`Flame=0` → `PURGE`<br>*aucune transition vers un arrêt* |
-
-### Hystérésis de 5 °C (§4.2), exemple de référence `T_init`=25 °C, `T_cible`=55 °C
-
-`T1` = 35 °C, `T2` = 45 °C → seuils effectifs **32,5 / 37,5 / 42,5 / 47,5 °C**
-
-| Transition | Condition | Vérifiée par le test |
-|---|---|---|
-| 100 % → 67 % (fermeture `EV1`) | `T_sec ≥ 37,5` | cas 2 |
-| 67 % → 100 % (réouverture `EV1`) | `T_sec < 32,5` | cas 2 |
-| 67 % → 33 % (fermeture `EV2`) | `T_sec ≥ 47,5` | cas 2 |
-| 33 % → 67 % (réouverture `EV2`) | `T_sec < 42,5` | cas 2 |
-| Non-basculement dans la bande | 37,0 / 47,0 / 43,0 / 33,0 °C | cas 2 |
-
-L'hystérésis est **mémorisée par le palier courant** : `majPalier()` est un
-`switch` sur `palier` qui n'autorise qu'un seul franchissement de seuil par
-itération. Trois comparaisons indépendantes recalculées à chaque pas
-détruiraient l'hystérésis (§4.2).
+| `T_cible`, `T_init` | °C | 30–90 / 0–60 | — |
+| `H_initial`, `H_produit_cible` | % | 0–100 / 1–50 | — |
+| `Duree_Max_Cycle` | min | 15–1440 | — |
+| `Temps_Prolongation` | min | 15–720 | Voir Avis §1.2 |
+| `Hhyst` | °C | 1–15 | — |
+| `Temps_Min_Fin` | min | 10–1440 | Plancher 10 min (évite un 0 accidentel) |
+| `Temps_Arret_Auto` | s | 30–1800 | — |
+| `Temps_Purge` | s | **60–300** | **Plancher de sécurité non contournable** |
+| `Temps_Allumage` | s | 2–10 | — |
+| `Press_H2_Min` | bar | 0,5–8 | — |
+| `Seuil_MQ8`, `Seuil_MQ6` | / 1023 | 100–900 | — |
 
 ---
 
-## 3. Incohérences et points signalés (§11.5)
+## 5. Écran — décision matérielle
 
-Ces points ont été **signalés et non contournés silencieusement**, conformément
-à la consigne §1.
+Passage du LCD 16×2 I2C au **20×4 I2C**, décidé avec l'opérateur avant
+implémentation (même bus I2C, même bibliothèque `LiquidCrystal_I2C` : seul le
+module physique change, aucune broche supplémentaire). Ce choix était
+nécessaire pour afficher lisiblement les ~15 paramètres du menu et les deux
+pages de télémesure (process/combustion et contexte/consignes) exigées au
+§16. L'adresse I2C du nouveau module (souvent `0x27` ou `0x3F` selon le
+fournisseur) doit être vérifiée avec un scanner I2C au premier branchement —
+`LCD_ADRESSE` est une constante isolée pour ce réglage.
 
-### Incohérence n°1 — Redondance entre `palier` et `phase_combustion`
-
-Le §9.5 demande à la fois `palier` (0/1/2) et `phase_combustion`
-(`PALIER_100`/`PALIER_67`/`PALIER_33`). Ces deux variables portent **la même
-information** dans les états de régulation ; les laisser évoluer indépendamment
-est la garantie d'une désynchronisation tôt ou tard.
-
-**Traitement retenu :** `palier` est l'unique source de vérité. `phase_combustion`
-en est **dérivée** à chaque itération par `phaseDuPalier(palier)`. Les deux
-variables du dictionnaire existent bien, mais une seule est écrite par la
-régulation.
-
-### Incohérence n°2 — `H_fin` peut dépasser 100 %
-
-`H_fin = H_produit_cible + H_amb` (§5). Avec `H_produit_cible` = 15 % et une
-ambiance humide à 90 % (saison des pluies, nuit), `H_fin` = 105 % : la condition
-`H_extr ≤ H_fin` est alors **vraie en permanence** et le cycle se termine dès la
-première itération, séchoir vide de toute action.
-
-Plus généralement, ce critère mesure une **humidité d'air excédentaire**, pas
-l'humidité du produit : il suppose un régime de ventilation constant. Il reste
-exploitable comme critère empirique, mais il doit être **corrélé par pesée** lors
-de la campagne d'essais du mémoire avant d'être considéré comme un critère de
-qualité produit.
-
-**Traitement retenu :** `H_fin` est écrêté à `H_FIN_MAX` = 95 % (constante en
-tête de fichier). L'écrêtage n'élimine pas le risque : si l'air extrait est
-déjà à 92 %, le cycle s'arrêtera aussitôt. **Recommandation : borner
-`H_produit_cible + H_amb` par construction en refusant le démarrage quand
-`H_amb` dépasse ~70 %.**
-
-### Incohérence n°3 — Le plancher 33 % interdit toute limitation de température
-
-Le §4.1 impose qu'au moins une électrovanne reste ouverte tant que la combustion
-est active, et le §12 interdit le palier 0 %. Conséquence directe : **rien dans
-la régulation ne peut arrêter la chauffe**. Si la sonde `T_sec` se décale ou se
-détache, ou si la charge de produit est faible, la chambre monte sans limite.
-Pour un séchage alimentaire (typiquement 50–60 °C), c'est un risque de
-dégradation du produit, voire d'incendie.
-
-**Traitement retenu :** ajout d'une sécurité **distincte de la régulation** —
-`T_sec ≥ T_SEC_MAX_SECURITE` (90 °C) provoque un arrêt propre vers
-`SECHAGE_TERMINE`. Ce n'est **pas** un palier 0 % : c'est un arrêt de sécurité,
-au même titre que la perte de flamme. La constante est en tête de fichier.
-**Recommandation matérielle : doubler cette protection par un thermostat de
-sécurité à réarmement manuel câblé en série sur l'alimentation des
-électrovannes, indépendant de l'Arduino.**
-
-### Incohérence n°4 — `T1`/`T2` indéfinis si `T_cible ≤ T_init`
-
-Le §4.3 ne dit rien du cas `T_cible ≤ T_init` (possible en mode manuel, ou en
-mode auto par temps chaud où `T_sec` au démarrage dépasse la consigne saisie).
-`T1` et `T2` seraient alors au-dessus de `T_cible` et la modulation inversée.
-
-**Traitement retenu :** `calculerSeuils()` rabat `T1 = T2 = T_cible` lorsque
-l'écart est inférieur à `ECART_MIN_SEUILS` (3 °C). Le brûleur démarre alors à
-100 % puis tombe directement au plancher 33 % une fois la consigne franchie.
-
-### Point n°5 — `Press_H2` : seuil et défaut de boucle non spécifiés
-
-Le §9.6 laisse `SEUIL_PRESS_H2_MIN` « à définir ». Une valeur de **2 bar** a été
-retenue sur 10 bar de pleine échelle — **à ajuster sur le prototype** selon la
-pression d'alimentation minimale du brûleur.
-
-Par ailleurs, le transmetteur étant en 4–20 mA, un courant **inférieur à 4 mA**
-signale une boucle coupée et non une pression nulle. `convertirPression()`
-renvoie alors 0 bar, ce qui provoque la bascule vers le GPL : comportement
-fail-safe volontaire. Le seuil de détection `ADC_PRESS_DEFAUT` suppose un shunt
-de **250 Ω** (1–5 V) ; à corriger si le prototype utilise une autre valeur.
-
-### Point n°6 — `SEUIL_MQ8` / `SEUIL_MQ6` non calibrés
-
-Le §9.6 les donne « à calibrer ». Valeur provisoire : 350 (sur 1023). La
-procédure de calibrage est rappelée en commentaire dans le code. **Ces seuils
-doivent impérativement être relevés sur le prototype, capteurs préchauffés
-24 h, avant toute mise en gaz.**
-
-### Point n°7 — Bascule H₂ → GPL sur échecs d'allumage répétés
-
-Le cahier des charges ne déclenche la bascule que sur la pression. En pratique,
-un brûleur H₂ qui échoue 3 fois de suite à l'allumage boucle indéfiniment
-purge → allumage → purge. Le compteur `nb_echecs_allumage` est implémenté et
-affichable, **mais aucune bascule automatique n'a été ajoutée** : ce serait une
-règle de conduite non spécifiée. À arbitrer lors de la soutenance.
-
-### Point n°8 — Câblage de l'arrêt d'urgence
-
-Le §9.2 décrit `AU_Urgence` comme un booléen sans préciser la polarité. Le
-programme suppose un **contact NC** (normalement fermé) câblé vers 0 V avec
-`INPUT_PULLUP` : au repos la broche est à `LOW`, l'appui **ou une rupture de
-fil** la met à `HIGH` et déclenche l'alarme. C'est la seule polarité acceptable
-pour un arrêt d'urgence. **Vérifier le câblage du prototype.**
-
-### Point n°9 — Blocage des temporisations par `delay()`
-
-`PURGE_DUREE` (120 s) et `ALLUMAGE_TIMEOUT` (4 s) sont implémentés par
-comparaison de `millis()`, jamais par `delay()`. C'est indispensable : un
-`delay()` de 120 s rendrait la détection de fuite et l'arrêt d'urgence
-inopérants pendant toute la purge. Les capteurs lents (DS18B20, DHT22) sont lus
-en mode **asynchrone** pour la même raison.
+**Non vérifié physiquement** : l'alignement exact des caractères sur un écran
+réel. Le banc de tests contrôle uniquement que chaque ligne composée tient
+dans 20 caractères (troncature sûre par `snprintf`, jamais de dépassement
+mémoire) — voir §6.
 
 ---
 
-## 4. Banc de tests (§11.4)
-
-Le programme Arduino est compilé **tel quel** sur PC : `tests/test_sechoir.cpp`
-inclut `sechoir_hybride.ino` et les bibliothèques matérielles sont remplacées
-par les mocks de `tests/mocks/`. Le banc pilote les capteurs et les boutons puis
-appelle `loop()`, exactement comme le ferait la carte.
+## 6. Banc de tests
 
 ```
 make -C tests run
 ```
 
+139 vérifications sur 16 cas, dont les nouveautés v2 :
+
 | Cas | Exigence couverte |
 |---|---|
-| 1 | Démarrage à froid : purge 120 s → allumage → palier 100 % |
-| 2 | Les **quatre** transitions d'hystérésis + les **quatre** non-basculements dans la bande |
-| 3 | Plancher 33 % : aucune extinction, même 25 °C au-dessus de la consigne |
-| 4 | Échec d'allumage après 4 s : fermeture totale, nouvelle purge complète |
-| 5 | Perte de flamme : fermeture des EV **dans l'itération même** (§7.3 règle 2) |
-| 6 | Bascule H₂ → GPL : palier conservé à 67 %, purge de 120 s respectée |
-| 7 | Fin de cycle sur `H_extr ≤ H_fin`, avec `H_fin` recalculé en continu |
-| 8 | Passage automatique en `PROLONGATION`, sans nouvelle limite de temps |
-| 9 | `URGENCE_ATEX` prioritaire + réarmement par les **deux** chemins, refusé tant que la cause persiste |
-| 10 | `MODE_SOLAIRE` strictement passif, et retour à 100 % sur démarrage à froid |
-| 11 | Menu LCD : navigation, édition d'une consigne, validation |
-| 12 | Arrêt propre par `Btn_Stop` |
+| 2 | Hystérésis à **quatre** niveaux, y compris la coupure volontaire à 0 % et le non-gaspillage d'un allumage si la demande n'est plus là au réveil |
+| 5 | Escalade après 3 échecs d'allumage consécutifs (ajout, Avis §1.4) |
+| 6, 7 | Basculement réussi (palier conservé) et basculement **raté** (escalade dès le 1er échec, menu REESSAYER/MANUEL/AUTOMATIQUE) |
+| 8 | Retour automatique GPL → H2 avec marge anti-court-cycle (ajout, Avis §1.5) |
+| 9 | Verrouillage du critère hygrométrique par `Temps_Min_Fin` |
+| 10 | `FIN_TEMPORISATION` : confirmation, **report** (et non « annulation », voir note ci-dessous), arrêt automatique |
+| 11 | Plafond `Temps_Prolongation` : arrêt forcé, `arret_force_duree` activé |
+| 14 | Verrou défensif : `ecrireSorties()` referme les deux vannes source si jamais les deux étaient demandées simultanément |
+| 15 | Persistance EEPROM : une valeur modifiée au menu survit à un rechargement (`chargerConfig()`) |
 
-**Validation du banc par mutation.** Le banc a été vérifié en réintroduisant
-délibérément deux défauts :
+**Note de conception découverte en testant** : la première version du cas 10
+prévoyait un « Menu = annulation complète, retour en régulation normale ».
+Le test a révélé que cette conception se re-déclenchait aussitôt (la
+condition hygrométrique restant vraie, la transition prioritaire n°5
+replongeait immédiatement en `FIN_TEMPORISATION`). Corrigé en un **report**
+(relance du délai de confirmation) — c'est le seul comportement cohérent tant
+que la condition qui a déclenché la demande d'arrêt persiste réellement.
 
-| Défaut injecté | Résultat |
-|---|---|
-| `H_HYST` ramenée de 5 °C à 0 °C | 5 échecs — les trois non-basculements et deux transitions |
-| Électrovannes appliquées **avant** le test de flamme (défaut historique §7.3 règle 2) | 4 échecs sur le cas 5 |
+**Validé par mutation** : désactiver l'escalade immédiate sur échec de
+basculement (`if (false)` à la place de `if (raison_purge ==
+PURGE_BASCULEMENT)`) fait échouer 3 vérifications du cas 7 ; restauré ensuite,
+le banc repasse à 139/139.
 
-Le banc détecte donc bien les régressions qu'il est censé prévenir.
+---
+
+## 7. Ce qui reste à valider sur le prototype réel
+
+- Calibrage de `Seuil_MQ8` / `Seuil_MQ6` (24 h de préchauffage, procédure en
+  commentaire dans le code).
+- Adresse I2C du nouvel écran 20×4 et alignement visuel des lignes.
+- `Press_H2_Min` : valeur réelle selon la pression minimale d'alimentation du
+  brûleur (2 bar est un point de départ, pas une mesure).
+- Comportement réel du contrôleur de flamme à l'extinction volontaire
+  (palier 0 %) : le programme suppose qu'il retombe à 0 sans particularité,
+  ce qui n'a pu être vérifié que par simulation (voir `tests/`).
+- Endurance EEPROM : l'écriture n'a lieu qu'à la sortie du menu (jamais à
+  chaque pression de bouton), ce qui reste largement dans la marge des
+  ~100 000 cycles d'écriture de l'EEPROM AVR pour un usage normal.

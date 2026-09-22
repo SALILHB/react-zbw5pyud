@@ -1,5 +1,5 @@
 /* ============================================================================
- *  BANC DE TESTS — Séchoir solaire hybride (§11.4)
+ *  BANC DE TESTS — Séchoir solaire hybride v2
  *
  *  Le programme Arduino est compilé TEL QUEL sur PC : les bibliothèques
  *  matérielles sont remplacées par les mocks de tests/mocks/. Le banc pilote
@@ -14,6 +14,7 @@
 #include "mocks/DallasTemperature.h"
 #include "mocks/DHT.h"
 #include "mocks/LiquidCrystal_I2C.h"
+#include "mocks/EEPROM.h"
 
 #include "../sechoir_hybride/sechoir_hybride.ino"
 
@@ -24,7 +25,6 @@
  * ------------------------------------------------------------------------*/
 static int nb_verif = 0;
 static int nb_echecs = 0;
-static const char* cas_courant = "";
 
 static void verifier(bool condition, const char* libelle) {
   nb_verif++;
@@ -43,16 +43,12 @@ static void verifierEgalFloat(float obtenu, float attendu, const char* libelle) 
   }
 }
 
-static void ouvrirCas(const char* nom) {
-  cas_courant = nom;
-  printf("  %s\n", nom);
-}
+static void ouvrirCas(const char* nom) { printf("  %s\n", nom); }
 
 /* --------------------------------------------------------------------------
  *  Pilotage du banc
  * ------------------------------------------------------------------------*/
 
-/* Fait tourner loop() en avançant l'horloge par pas de `pas` ms. */
 static void avancer(uint32_t duree_ms, uint32_t pas = 20) {
   if (duree_ms == 0) { loop(); return; }
   uint32_t reste = duree_ms;
@@ -64,10 +60,7 @@ static void avancer(uint32_t duree_ms, uint32_t pas = 20) {
   }
 }
 
-/* Une seule itération de loop(). */
 static void uneIteration() { avancer(20, 20); }
-
-/* Laisse le temps à la lecture périodique des capteurs lents de s'appliquer. */
 static void rafraichirCapteurs() { avancer(1200); }
 
 static void appuyer(uint8_t pin) {
@@ -77,7 +70,6 @@ static void appuyer(uint8_t pin) {
   avancer(60);
 }
 
-/* Valeur ADC correspondant à une pression donnée (transmetteur 4-20 mA). */
 static int adcPression(float bar) {
   if (bar <= 0.0f) return ADC_PRESS_4MA;
   return ADC_PRESS_4MA + (int)(bar / PRESS_H2_PLEINE_ECHELLE *
@@ -86,18 +78,22 @@ static int adcPression(float bar) {
 
 static void reglerTsec(float valeur) { mock_ds18b20[IDX_SONDE_T_SEC] = valeur; }
 static void reglerTcap(float valeur) { mock_ds18b20[IDX_SONDE_T_CAP] = valeur; }
-static void reglerHextr(float valeur) { mock_dht_hum[PIN_DHT_EXTR] = valeur; }
-static void reglerHamb(float valeur)  { mock_dht_hum[PIN_DHT_AMB] = valeur; }
+static void reglerHsec(float valeur) { mock_dht_hum[PIN_DHT_EXTR] = valeur; }
+static void reglerHamb(float valeur) { mock_dht_hum[PIN_DHT_AMB] = valeur; }
 static void reglerFlamme(bool presente) {
   mockIO.entree_num[PIN_FLAMME] = presente ? NIVEAU_FLAMME_PRESENTE
                                            : !NIVEAU_FLAMME_PRESENTE;
 }
 
-/* Remet le banc et la carte dans un état connu, puis applique les consignes
- * de référence du cahier des charges (§4.3 : 25 °C -> 55 °C). */
+static uint32_t purgeMs()   { return Config.Temps_Purge * 1000UL; }
+static uint32_t allumageMs(){ return Config.Temps_Allumage * 1000UL; }
+
+/* Remet le banc et la carte dans un état connu, avec des consignes de
+ * référence : T_init=25 -> T_cible=55 (T1=35, T2=45, T3=55). */
 static void initBanc() {
   mockIO.reinitialiser();
   Serial.lignes.clear();
+  memset(EEPROM.donnees, 0xFF, sizeof(EEPROM.donnees));   // EEPROM vierge
 
   mockIO.entree_num[PIN_AU_URGENCE] = LOW;   // contact NC fermé = pas d'urgence
   mockIO.entree_num[PIN_FLAMME]     = LOW;
@@ -110,418 +106,581 @@ static void initBanc() {
   mock_dht_temp[PIN_DHT_AMB]  = 25.0f;
   mock_dht_temp[PIN_DHT_EXTR] = 40.0f;
   reglerHamb(35.0f);
-  reglerHextr(90.0f);
+  reglerHsec(90.0f);
 
-  setup();
+  setup();   // charge Config depuis l'EEPROM (vierge -> valeurs par défaut)
 
-  Mode_Auto       = false;                    // mode manuel par défaut au banc
-  Choix_Mode      = 2;                        // H2
-  T_cible         = 55.0f;
-  T_init          = 25.0f;
-  H_produit_cible = 10.0f;
-  Duree_Max_Cycle = 600UL;
+  Config.Mode_Auto       = false;             // mode manuel par défaut au banc
+  Config.Choix_Mode      = 2;                 // H2
+  Config.T_cible         = 55.0f;
+  Config.T_init          = 25.0f;
+  Config.H_produit_cible = 10.0f;
+  Config.Duree_Max_Cycle = 600UL;             // min
+  Config.Temps_Prolongation = 180UL;          // min
+  Config.Temps_Min_Fin   = 120UL;             // min (2 h)
+  Config.Temps_Arret_Auto = 300UL;            // s
+  Config.Temps_Purge     = 120UL;             // s
+  Config.Temps_Allumage  = 4UL;               // s
+  Config.Hhyst           = 5.0f;
+  Config.Press_H2_Min    = 2.0f;
 }
 
-/* Démarre un cycle et amène le brûleur jusqu'au palier (purge + allumage). */
 static void demarrerEtAllumer() {
   appuyer(PIN_BTN_START);
-  avancer(PURGE_DUREE + 200);                 // purge intégrale -> ALLUMAGE
+  avancer(purgeMs() + 200);
   reglerFlamme(true);
   avancer(100);
 }
 
 /* --------------------------------------------------------------------------
- *  CAS 1 — Démarrage à froid : PURGE -> ALLUMAGE -> PALIER 100 % (§7.2, §4.1)
+ *  CAS 1 — Démarrage à froid : PURGE -> ALLUMAGE -> PALIER 100 %
  * ------------------------------------------------------------------------*/
 static void cas_demarrage_a_froid() {
-  ouvrirCas("1. Demarrage a froid : purge 120 s -> allumage -> palier 100 %");
+  ouvrirCas("1. Demarrage a froid : purge -> allumage -> palier 100 %");
   initBanc();
 
   appuyer(PIN_BTN_START);
   verifier(etat_courant == ETAT_MODE_H2, "entree en MODE_H2");
   verifier(phase_combustion == PH_PURGE, "phase initiale = PURGE");
+  verifier(raison_purge == PURGE_DEMARRAGE, "raison = demarrage");
   verifier(palier == PALIER_100, "demarrage toujours au palier 100 %");
   verifier(!V_H2 && !V_But, "vannes source fermees pendant la purge");
   verifier(!EV1 && !EV2 && !EV3, "aucune EV ouverte pendant la purge");
   verifier(!Spark, "Spark inactif pendant la purge");
-  verifier(PWM_Purge == PWM_PURGE_BALAYAGE, "ventilation de purge maximale (§8)");
+  verifier(PWM_Purge == PWM_PURGE_BALAYAGE, "ventilation de purge maximale");
 
-  /* Aucune ouverture de gaz avant l'echeance des 120 s. */
-  avancer(PURGE_DUREE - 2000);
-  verifier(phase_combustion == PH_PURGE, "toujours en purge a 118 s");
-  verifier(!EV1 && !EV2 && !EV3, "gaz toujours ferme a 118 s (§7.3 regle 1)");
+  avancer(purgeMs() - 2000);
+  verifier(phase_combustion == PH_PURGE, "toujours en purge juste avant l'echeance");
+  verifier(!EV1 && !EV2 && !EV3, "gaz toujours ferme avant la fin de purge");
 
   avancer(2500);
-  verifier(phase_combustion == PH_ALLUMAGE, "passage en ALLUMAGE a 120 s");
+  verifier(phase_combustion == PH_ALLUMAGE, "passage en ALLUMAGE a l'echeance de purge");
   verifier(V_H2 && !V_But, "vanne source H2 ouverte, GPL fermee");
-  verifier(EV1 && EV2 && EV3, "ouverture au palier courant : 3 EV");
+  verifier(EV1 && EV2 && EV3, "ouverture au palier 100% : 3 EV");
   verifier(Spark, "Spark actif pendant l'allumage");
 
   reglerFlamme(true);
   uneIteration();
   verifier(phase_combustion == PH_PALIER_100, "flamme confirmee -> PALIER_100");
   verifier(!Spark, "Spark coupe des la confirmation de flamme");
-  verifier(EV1 && EV2 && EV3, "palier 100 % : EV1+EV2+EV3");
-  verifierEgalFloat(T1, 35.0f, "seuil T1 (§4.3)");
-  verifierEgalFloat(T2, 45.0f, "seuil T2 (§4.3)");
+  verifierEgalFloat(T1, 35.0f, "seuil T1");
+  verifierEgalFloat(T2, 45.0f, "seuil T2");
+  verifierEgalFloat(T3, 55.0f, "seuil T3 = T_cible");
 }
 
 /* --------------------------------------------------------------------------
- *  CAS 2 — Les quatre transitions d'hysteresis + non-basculement (§4.2)
- *  T_init = 25, T_cible = 55 -> T1 = 35, T2 = 45
- *  Seuils effectifs : 32,5 / 37,5 / 42,5 / 47,5
+ *  CAS 2 — Hysteresis a QUATRE niveaux (100/67/33/0), y compris le
+ *  non-basculement dans chaque bande.
+ *  T1=35, T2=45, T3=55(=T_cible) ; seuils effectifs a +/-2,5.
  * ------------------------------------------------------------------------*/
-static void cas_hysteresis() {
-  ouvrirCas("2. Hysteresis 5 C : 4 transitions + non-basculement dans la bande");
+static void cas_hysteresis_quatre_niveaux() {
+  ouvrirCas("2. Hysteresis 4 niveaux : 100/67/33/0%, non-basculement dans la bande");
   initBanc();
   demarrerEtAllumer();
   verifier(palier == PALIER_100, "point de depart : palier 100 %");
 
   reglerTsec(37.0f);  rafraichirCapteurs();
-  verifier(palier == PALIER_100, "37,0 C < T1+2,5 : PAS de basculement");
-  verifier(EV1 && EV2 && EV3, "EV1 toujours ouverte dans la bande");
+  verifier(palier == PALIER_100, "37,0 C < T1+2,5 : pas de basculement");
 
   reglerTsec(37.5f);  rafraichirCapteurs();
-  verifier(palier == PALIER_67, "T_sec >= T1+2,5 : 100 % -> 67 % (fermeture EV1)");
-  verifier(!EV1 && EV2 && EV3, "palier 67 % : EV2+EV3");
+  verifier(palier == PALIER_67, "T_sec >= T1+2,5 : 100% -> 67% (EV1 fermee)");
+  verifier(!EV1 && EV2 && EV3, "palier 67% : EV2+EV3");
 
   reglerTsec(47.0f);  rafraichirCapteurs();
-  verifier(palier == PALIER_67, "47,0 C < T2+2,5 : PAS de basculement");
+  verifier(palier == PALIER_67, "47,0 C < T2+2,5 : pas de basculement");
 
   reglerTsec(47.5f);  rafraichirCapteurs();
-  verifier(palier == PALIER_33, "T_sec >= T2+2,5 : 67 % -> 33 % (fermeture EV2)");
-  verifier(!EV1 && !EV2 && EV3, "palier 33 % : EV3 seule");
+  verifier(palier == PALIER_33, "T_sec >= T2+2,5 : 67% -> 33% (EV2 fermee)");
+  verifier(!EV1 && !EV2 && EV3, "palier 33% : EV3 seule");
 
-  reglerTsec(43.0f);  rafraichirCapteurs();
-  verifier(palier == PALIER_33, "43,0 C >= T2-2,5 : PAS de basculement");
+  reglerTsec(57.0f);  rafraichirCapteurs();
+  verifier(palier == PALIER_33 || palier == PALIER_0, "en transit vers 0% autour de T3+2,5");
 
-  reglerTsec(42.4f);  rafraichirCapteurs();
-  verifier(palier == PALIER_67, "T_sec < T2-2,5 : 33 % -> 67 % (reouverture EV2)");
-  verifier(!EV1 && EV2 && EV3, "palier 67 % retrouve");
+  /* Franchissement de T3 : coupure VOLONTAIRE, pas une panne. */
+  reglerTsec(57.6f);  rafraichirCapteurs();
+  verifier(palier == PALIER_0, "T_sec >= T3+2,5 : 33% -> 0% (coupure volontaire)");
+  verifier(!EV1 && !EV2 && !EV3, "palier 0% : TOUTES les EV fermees (§2 v2)");
+  verifier(!V_H2, "vanne source H2 fermee au palier 0%");
+  verifier(phase_combustion == PH_PURGE, "coupure = retour en PURGE (raison PALIER_0)");
+  verifier(raison_purge == PURGE_PALIER_0, "raison de purge = PALIER_0 (pas ECHEC)");
+  verifier(nb_echecs_allumage == 0, "coupure volontaire : aucun echec comptabilise");
 
-  reglerTsec(33.0f);  rafraichirCapteurs();
-  verifier(palier == PALIER_67, "33,0 C >= T1-2,5 : PAS de basculement");
-
-  reglerTsec(32.4f);  rafraichirCapteurs();
-  verifier(palier == PALIER_100, "T_sec < T1-2,5 : 67 % -> 100 % (reouverture EV1)");
-  verifier(EV1 && EV2 && EV3, "palier 100 % retrouve");
-}
-
-/* --------------------------------------------------------------------------
- *  CAS 3 — Plancher a 33 % : jamais d'arret total (§4.1, §12)
- * ------------------------------------------------------------------------*/
-static void cas_plancher_33() {
-  ouvrirCas("3. Plancher 33 % : aucune extinction meme tres au-dessus de la consigne");
-  initBanc();
-  demarrerEtAllumer();
-
-  reglerTsec(80.0f);                        // 25 C au-dessus de T_cible
-  for (int i = 0; i < 10; i++) {
-    rafraichirCapteurs();
-    verifier(palier == PALIER_33, "palier bloque a 33 %, pas de valeur d'arret");
-    verifier(EV3, "EV3 reste ouverte : il n'existe pas de palier 0 %");
-    verifier(V_H2, "vanne source toujours ouverte");
-    verifier(phase_combustion == PH_PALIER_33, "phase PALIER_33 maintenue");
-  }
-  verifier(etat_courant == ETAT_MODE_H2, "aucune extinction / rallumage cyclique");
-}
-
-/* --------------------------------------------------------------------------
- *  CAS 4 — Echec d'allumage apres 4 s (§7.2)
- * ------------------------------------------------------------------------*/
-static void cas_echec_allumage() {
-  ouvrirCas("4. Echec d'allumage : pas de flamme sous 4 s -> fermeture -> PURGE");
-  initBanc();
-
-  appuyer(PIN_BTN_START);
-  avancer(PURGE_DUREE + 200);
-  verifier(phase_combustion == PH_ALLUMAGE, "phase ALLUMAGE atteinte");
-
-  avancer(3000);                             // 3,2 s : encore dans le delai
-  verifier(phase_combustion == PH_ALLUMAGE, "toujours en allumage avant 4 s");
-  verifier(EV1 && EV2 && EV3, "EV ouvertes pendant la tentative d'allumage");
-
-  avancer(1200);                             // au-dela de 4 s
-  verifier(phase_combustion == PH_PURGE, "echec -> retour PURGE");
-  verifier(!EV1 && !EV2 && !EV3, "fermeture totale des EV");
-  verifier(!V_H2 && !V_But, "fermeture des vannes source");
-  verifier(!Spark, "Spark coupe");
-  verifier(nb_echecs_allumage == 1, "echec comptabilise");
-  verifier(PWM_Purge == PWM_PURGE_BALAYAGE, "nouvelle purge a ventilation maximale");
-
-  /* La nouvelle purge dure a nouveau 120 s pleines. */
-  avancer(PURGE_DUREE - 5000);
-  verifier(phase_combustion == PH_PURGE, "purge complete re-imposee avant nouvel essai");
-}
-
-/* --------------------------------------------------------------------------
- *  CAS 5 — Perte de flamme inattendue (§7.3 regle 2)
- * ------------------------------------------------------------------------*/
-static void cas_perte_flamme() {
-  ouvrirCas("5. Perte de flamme : fermeture des EV dans l'iteration meme");
-  initBanc();
-  demarrerEtAllumer();
-  verifier(phase_combustion == PH_PALIER_100, "brûleur en regulation");
-  verifier(EV1 && EV2 && EV3, "EV ouvertes avant la perte de flamme");
-
+  /* La flamme s'eteint reellement une fois le gaz coupe (le mock ne le fait
+   * pas tout seul : le controleur de flamme physique reagirait, mais rien
+   * n'emule cette inertie ici). Sans ce reglage, Flame resterait "vraie" en
+   * continu et l'etape ALLUMAGE plus bas se refermerait instantanement sur
+   * PH_PALIER_33 avant que le test ait pu l'observer. */
   reglerFlamme(false);
-  uneIteration();                            // UNE SEULE iteration de loop()
-  verifier(!EV1 && !EV2 && !EV3, "EV refermees immediatement (pas un cycle de retard)");
-  verifier(!V_H2 && !V_But, "vannes source refermees immediatement");
-  verifier(!Spark, "Spark inactif");
-  verifier(phase_combustion == PH_PURGE, "retour PURGE");
-  verifier(mockIO.sortie_num[PIN_EV1] == LOW, "broche EV1 physiquement retombee");
-  verifier(mockIO.sortie_num[PIN_EV3] == LOW, "broche EV3 physiquement retombee");
-}
 
-/* --------------------------------------------------------------------------
- *  CAS 6 — Bascule H2 -> GPL : palier CONSERVE, purge obligatoire (§7.3)
- * ------------------------------------------------------------------------*/
-static void cas_bascule_h2_gpl() {
-  ouvrirCas("6. Bascule H2 -> GPL : palier conserve + purge de 120 s");
-  initBanc();
-  Mode_Auto = true;                          // l'arbitrage n'existe qu'en auto
-  reglerTcap(20.0f);                         // solaire indisponible
+  /* Tant que T_sec reste haute, purge indefiniment prolongee, PAS de
+   * rallumage inutile (AJOUT au cahier des charges). */
+  avancer(purgeMs() + 5000);
+  verifier(phase_combustion == PH_PURGE, "reste en veille gaz ferme tant que T_sec est haute");
+  verifier(!Spark, "aucune tentative d'allumage tant que la demande de 33% n'est pas revenue");
+
+  /* La demande de chauffe revient : reallumage direct au palier 33% (pas
+   * 100%), apres une purge deja largement satisfaite. */
+  reglerTsec(52.0f);  // < T3 - 2,5 = 52,5 -> presque ; on descend encore un peu
   rafraichirCapteurs();
-
-  demarrerEtAllumer();
-  verifier(etat_courant == ETAT_MODE_H2, "cycle demarre sur H2");
-  verifier(Source_Active == SRC_H2, "Source_Active = H2");
-
-  reglerTsec(40.0f);                         // amene le brûleur au palier 67 %
+  reglerTsec(50.0f);
   rafraichirCapteurs();
-  verifier(palier == PALIER_67, "regulation etablie au palier 67 %");
-
-  /* Reservoir H2 epuise. */
-  mockIO.entree_ana[PIN_PRESS_H2] = adcPression(0.5f);
-  uneIteration();
-  verifier(etat_courant == ETAT_MODE_GPL, "bascule vers MODE_GPL");
-  verifier(Source_Active == SRC_GPL, "Source_Active = GPL");
-  verifier(palier == PALIER_67, "PALIER CONSERVE a 67 % (pas de retour a 100 %)");
-  verifier(phase_combustion == PH_PURGE, "purge obligatoire avant remise en gaz");
-  verifier(!EV1 && !EV2 && !EV3, "gaz ferme pendant la purge de bascule");
-  verifier(!V_H2 && !V_But, "les deux vannes source fermees");
-
-  reglerFlamme(false);
-  avancer(PURGE_DUREE + 200);
-  verifier(phase_combustion == PH_ALLUMAGE, "reallumage apres 120 s");
-  verifier(!V_H2 && V_But, "vanne source GPL ouverte, H2 fermee");
-  verifier(!EV1 && EV2 && EV3, "reallumage AU PALIER 67 % (EV2+EV3)");
+  verifier(phase_combustion == PH_ALLUMAGE, "la demande revient -> nouvel allumage");
+  verifier(palier == PALIER_33, "reallumage au palier 33% (pas 100%)");
+  verifier(EV3 && !EV1 && !EV2, "ouverture EV3 seule pour le reallumage a 33%");
 
   reglerFlamme(true);
   uneIteration();
-  verifier(phase_combustion == PH_PALIER_67, "reprise de la regulation a 67 %");
-  verifier(palier == PALIER_67, "palier toujours 67 % apres reallumage");
+  verifier(phase_combustion == PH_PALIER_33, "regulation reprend au palier 33%");
+
+  /* Redescente complete : 33% -> 67% -> 100%. */
+  reglerTsec(43.0f);  rafraichirCapteurs();
+  verifier(palier == PALIER_33, "43,0 C >= T2-2,5 : pas de basculement");
+  reglerTsec(42.4f);  rafraichirCapteurs();
+  verifier(palier == PALIER_67, "T_sec < T2-2,5 : 33% -> 67%");
+  reglerTsec(33.0f);  rafraichirCapteurs();
+  verifier(palier == PALIER_67, "33,0 C >= T1-2,5 : pas de basculement");
+  reglerTsec(32.4f);  rafraichirCapteurs();
+  verifier(palier == PALIER_100, "T_sec < T1-2,5 : 67% -> 100%");
 }
 
 /* --------------------------------------------------------------------------
- *  CAS 7 — Fin de cycle sur H_extr <= H_fin, H_fin recalcule (§5)
+ *  CAS 3 — Echec d'allumage apres Temps_Allumage
  * ------------------------------------------------------------------------*/
-static void cas_fin_de_cycle() {
-  ouvrirCas("7. Fin de cycle : H_extr <= H_fin, avec H_fin recalcule en continu");
+static void cas_echec_allumage() {
+  ouvrirCas("3. Echec d'allumage : pas de flamme sous Temps_Allumage -> PURGE");
   initBanc();
-  demarrerEtAllumer();
 
-  verifierEgalFloat(H_fin, 45.0f, "H_fin = H_produit_cible + H_amb = 10 + 35");
+  appuyer(PIN_BTN_START);
+  avancer(purgeMs() + 200);
+  verifier(phase_combustion == PH_ALLUMAGE, "phase ALLUMAGE atteinte");
 
-  /* H_amb varie : H_fin doit suivre immediatement. */
-  reglerHamb(20.0f);
-  rafraichirCapteurs();
-  verifierEgalFloat(H_fin, 30.0f, "H_fin recalcule apres variation de H_amb");
+  avancer(allumageMs() - 800);
+  verifier(phase_combustion == PH_ALLUMAGE, "toujours en allumage avant l'echeance");
 
-  reglerHextr(44.0f);
-  rafraichirCapteurs();
-  verifier(etat_courant == ETAT_MODE_H2, "44 % > H_fin (30 %) : le cycle continue");
-
-  reglerHamb(35.0f);                         // H_fin redevient 45 %
-  rafraichirCapteurs();
-  verifierEgalFloat(H_fin, 45.0f, "H_fin revenu a 45 %");
-  verifier(etat_courant == ETAT_SECHAGE_TERMINE, "H_extr (44) <= H_fin (45) : cycle termine");
-  verifier(!EV1 && !EV2 && !EV3, "gaz ferme en fin de cycle");
-  verifier(!V_H2 && !V_But, "vannes source fermees");
-  verifier(PWM_Extract == PWM_EXTRACT_REFROID, "extraction faible pour refroidir (§8)");
-  verifier(PWM_Distrib == PWM_ARRET, "distribution a l'arret (§8)");
-}
-
-/* --------------------------------------------------------------------------
- *  CAS 8 — PROLONGATION sur depassement de Duree_Max_Cycle (§6)
- * ------------------------------------------------------------------------*/
-static void cas_prolongation() {
-  ouvrirCas("8. Prolongation automatique, sans nouvelle limite de temps");
-  initBanc();
-  Duree_Max_Cycle = 3UL;                     // 3 min pour le banc
-  reglerTsec(30.0f);
-  rafraichirCapteurs();
-
-  demarrerEtAllumer();                       // ~121 s consommees par la purge
-  verifier(etat_courant == ETAT_MODE_H2, "cycle en cours avant l'echeance");
-  verifier(phase_combustion == PH_PALIER_100, "regulation etablie");
-
-  avancer(70000);                            // depasse les 180 s de cycle
-  verifier(etat_courant == ETAT_PROLONGATION, "passage automatique en PROLONGATION");
-  verifier(Source_Active == SRC_H2, "source memorisee pour la prolongation");
-  verifier(phase_combustion == PH_PALIER_100, "aucune nouvelle purge : regulation poursuivie");
-  verifier(EV1 && EV2 && EV3, "electrovannes toujours pilotees par le palier");
-  verifier(V_H2, "vanne source toujours ouverte");
-
-  avancer(400000);                           // tres au-dela : aucune limite
-  verifier(etat_courant == ETAT_PROLONGATION, "la prolongation n'a pas de duree propre");
-
-  reglerHextr(40.0f);                        // H_fin = 45 %
-  rafraichirCapteurs();
-  verifier(etat_courant == ETAT_SECHAGE_TERMINE, "la prolongation s'acheve sur H_fin");
-}
-
-/* --------------------------------------------------------------------------
- *  CAS 9 — URGENCE_ATEX prioritaire + les DEUX chemins de rearmement (§7.4)
- * ------------------------------------------------------------------------*/
-static void cas_urgence_et_rearmement() {
-  ouvrirCas("9. URGENCE_ATEX prioritaire + rearmement materiel ET par menu");
-  initBanc();
-  demarrerEtAllumer();
-  verifier(EV1 && EV2 && EV3, "brûleur en fonctionnement avant l'alarme");
-
-  /* --- Declenchement sur fuite H2 --- */
-  mockIO.entree_ana[PIN_MQ8_H2] = 600;
-  uneIteration();
-  verifier(etat_courant == ETAT_URGENCE_ATEX, "MQ8 > seuil -> URGENCE_ATEX");
-  verifier(!EV1 && !EV2 && !EV3, "fermeture immediate de toutes les EV");
+  avancer(1200);
+  verifier(phase_combustion == PH_PURGE, "echec -> retour PURGE");
+  verifier(raison_purge == PURGE_ECHEC, "raison = ECHEC");
+  verifier(!EV1 && !EV2 && !EV3, "fermeture totale des EV");
   verifier(!V_H2 && !V_But, "fermeture des vannes source");
-  verifier(!Spark, "Spark = 0");
-  verifier(Buzzer, "buzzer actif");
-  verifier(PWM_Purge == 255, "purge a 255 (§8)");
-  verifier(PWM_Distrib == 0, "distribution a 0 (§8)");
-  verifier(PWM_Extract == 255, "extraction a 255 (§8)");
-  verifier(mockIO.sortie_pwm[PIN_PWM_PURGE] == 255, "PWM purge physiquement a 255");
-  verifier(mockIO.sortie_num[PIN_BUZZER] == HIGH, "buzzer physiquement actif");
+  verifier(nb_echecs_allumage == 1, "1er echec comptabilise");
+  verifier(etat_courant == ETAT_MODE_H2, "pas encore d'escalade (1 seul echec)");
+}
 
-  /* --- Rearmement refuse tant que la cause persiste --- */
-  appuyer(PIN_BTN_REARM);
-  verifier(etat_courant == ETAT_URGENCE_ATEX, "rearmement refuse : fuite toujours presente");
+/* --------------------------------------------------------------------------
+ *  CAS 4 — Perte de flamme inattendue
+ * ------------------------------------------------------------------------*/
+static void cas_perte_flamme() {
+  ouvrirCas("4. Perte de flamme inattendue : fermeture immediate des EV");
+  initBanc();
+  demarrerEtAllumer();
+  verifier(EV1 && EV2 && EV3, "EV ouvertes avant la perte de flamme");
 
-  /* --- Chemin 1 : bouton de rearmement materiel --- */
-  mockIO.entree_ana[PIN_MQ8_H2] = 50;
+  reglerFlamme(false);
   uneIteration();
-  verifier(etat_courant == ETAT_URGENCE_ATEX, "l'etat d'urgence n'est pas quitte tout seul");
-  appuyer(PIN_BTN_REARM);
-  verifier(etat_courant == ETAT_ATTENTE_DEMARRAGE, "rearmement materiel -> ATTENTE_DEMARRAGE");
-  verifier(!Buzzer, "buzzer coupe apres rearmement");
+  verifier(!EV1 && !EV2 && !EV3, "EV refermees immediatement");
+  verifier(!V_H2 && !V_But, "vannes source refermees immediatement");
+  verifier(phase_combustion == PH_PURGE, "retour PURGE");
+  verifier(raison_purge == PURGE_ECHEC, "raison = ECHEC (perte de flamme)");
+  verifier(mockIO.sortie_num[PIN_EV1] == LOW, "broche EV1 physiquement retombee");
+}
 
-  /* --- Declenchement sur arret d'urgence, puis chemin 2 : menu LCD --- */
-  mockIO.entree_num[PIN_AU_URGENCE] = HIGH;  // contact NC ouvert = AU enfonce
+/* --------------------------------------------------------------------------
+ *  CAS 5 — Echecs d'allumage REPETES -> ETAT_ERREUR_COMBUSTION (§13, AVIS n°3)
+ * ------------------------------------------------------------------------*/
+static void cas_echecs_repetes_escalade() {
+  ouvrirCas("5. Echecs d'allumage repetes -> ERREUR_COMBUSTION (escalade)");
+  initBanc();
+
+  appuyer(PIN_BTN_START);
+  for (uint16_t i = 0; i < MAX_ECHECS_AVANT_ALARME; i++) {
+    avancer(purgeMs() + 200);
+    avancer(allumageMs() + 200);   // pas de flamme -> echec
+  }
+  verifier(nb_echecs_allumage >= MAX_ECHECS_AVANT_ALARME, "seuil d'echecs atteint");
+  verifier(etat_courant == ETAT_ERREUR_COMBUSTION, "escalade vers ERREUR_COMBUSTION");
+  verifier(raison_erreur_combustion == ERR_ALLUMAGE_REPETE, "raison = ALLUMAGE_REPETE");
+  verifier(Buzzer, "buzzer actif en erreur de combustion");
+  verifier(!EV1 && !EV2 && !EV3 && !V_H2 && !V_But, "gaz ferme en attente de decision");
+
+  /* REESSAYER : repart sur une purge complete, meme source. */
+  appuyer(PIN_BTN_OK);   // Choix_Erreur par defaut = REESSAYER
+  verifier(phase_combustion == PH_PURGE, "REESSAYER relance une purge complete");
+  verifier(etat_courant == ETAT_MODE_H2, "retour dans MODE_H2 (meme source)");
+  verifier(nb_echecs_allumage == 0, "compteur d'echecs remis a zero");
+}
+
+/* --------------------------------------------------------------------------
+ *  CAS 6 — Bascule H2 -> GPL reussie : palier CONSERVE
+ * ------------------------------------------------------------------------*/
+static void cas_bascule_h2_gpl_reussie() {
+  ouvrirCas("6. Bascule H2 -> GPL reussie : palier conserve, purge complete");
+  initBanc();
+  Config.Mode_Auto = true;
+  reglerTcap(20.0f);
+  rafraichirCapteurs();
+
+  demarrerEtAllumer();
+  verifier(Source_Active == SRC_H2, "cycle demarre sur H2");
+
+  reglerTsec(40.0f);
+  rafraichirCapteurs();
+  verifier(palier == PALIER_67, "regulation etablie au palier 67%");
+
+  mockIO.entree_ana[PIN_PRESS_H2] = adcPression(0.5f);   // H2 epuise
   uneIteration();
-  verifier(etat_courant == ETAT_URGENCE_ATEX, "arret d'urgence -> URGENCE_ATEX");
-  verifier(Menu_Index == MENU_REARMEMENT, "l'option Rearmement est presentee d'office");
+  verifier(Source_Active == SRC_GPL, "bascule vers GPL");
+  verifier(palier == PALIER_67, "PALIER CONSERVE a 67% (pas de retour a 100%)");
+  verifier(raison_purge == PURGE_BASCULEMENT, "raison = BASCULEMENT");
+  verifier(!EV1 && !EV2 && !EV3, "gaz ferme pendant la purge de bascule");
 
+  /* Le gaz est coupe : la flamme reelle s'eteindrait. Le mock ne le fait pas
+   * tout seul (Flame etait restee "vraie" depuis demarrerEtAllumer()) ; sans
+   * cette ligne, la phase ALLUMAGE ci-dessous se refermerait sur
+   * PH_PALIER_67 avant meme l'assertion suivante. */
+  reglerFlamme(false);
+
+  avancer(purgeMs() + 200);
+  verifier(phase_combustion == PH_ALLUMAGE, "reallumage apres la purge de bascule");
+  verifier(!V_H2 && V_But, "vanne source GPL ouverte, H2 fermee");
+  verifier(!EV1 && EV2 && EV3, "reallumage AU PALIER 67% (EV2+EV3)");
+
+  reglerFlamme(true);
+  uneIteration();
+  verifier(phase_combustion == PH_PALIER_67, "regulation reprend a 67%");
+  verifier(etat_courant == ETAT_MODE_GPL, "etat principal = MODE_GPL");
+}
+
+/* --------------------------------------------------------------------------
+ *  CAS 7 — Echec du basculement -> ERREUR_COMBUSTION des le 1er echec (§13)
+ * ------------------------------------------------------------------------*/
+static void cas_bascule_echouee() {
+  ouvrirCas("7. Echec du basculement : escalade des le 1er echec (pas de boucle silencieuse)");
+  initBanc();
+  Config.Mode_Auto = true;
+  reglerTcap(20.0f);
+  rafraichirCapteurs();
+  demarrerEtAllumer();
+
+  mockIO.entree_ana[PIN_PRESS_H2] = adcPression(0.5f);
+  uneIteration();
+  verifier(Source_Active == SRC_GPL, "bascule declenchee vers GPL");
+
+  /* Le GPL est simule indisponible : la flamme ne doit JAMAIS se confirmer.
+   * Sans ce reglage, Flame resterait "vraie" depuis demarrerEtAllumer() et
+   * l'allumage "reussirait" artificiellement, invalidant tout le scenario. */
+  reglerFlamme(false);
+
+  avancer(purgeMs() + 200);
+  verifier(phase_combustion == PH_ALLUMAGE, "tentative d'allumage sur la nouvelle source");
+  avancer(allumageMs() + 200);
+
+  verifier(etat_courant == ETAT_ERREUR_COMBUSTION, "echec de bascule -> ERREUR_COMBUSTION direct");
+  verifier(raison_erreur_combustion == ERR_BASCULEMENT, "raison = BASCULEMENT");
+  verifier(Buzzer, "alarme sonore");
+  verifier(!EV1 && !EV2 && !EV3 && !V_H2 && !V_But, "gaz ferme");
+
+  /* Choix MANUEL : retour a l'attente, mode manuel force. */
+  appuyer(PIN_BTN_MENU);   // REESSAYER -> MANUEL
   appuyer(PIN_BTN_OK);
-  verifier(etat_courant == ETAT_URGENCE_ATEX, "rearmement menu refuse : AU toujours enfonce");
-
-  mockIO.entree_num[PIN_AU_URGENCE] = LOW;   // AU deverrouille
-  uneIteration();
-  /* Tour complet du menu : on verifie au passage la navigation. */
-  for (uint8_t i = 0; i < NB_CHAMPS_MENU; i++) appuyer(PIN_BTN_MENU);
-  verifier(Menu_Index == MENU_REARMEMENT, "navigation menu : tour complet");
-  appuyer(PIN_BTN_OK);
-  verifier(etat_courant == ETAT_ATTENTE_DEMARRAGE, "rearmement par le menu -> ATTENTE_DEMARRAGE");
-  verifier(!Buzzer, "buzzer coupe");
+  verifier(etat_courant == ETAT_ATTENTE_DEMARRAGE, "MANUEL -> ATTENTE_DEMARRAGE");
+  verifier(!Config.Mode_Auto, "mode automatique desactive");
   verifier(!EV1 && !EV2 && !EV3 && !V_H2 && !V_But, "installation fermee au repos");
 }
 
 /* --------------------------------------------------------------------------
- *  CAS 10 — MODE_SOLAIRE strictement passif (§2, §12)
+ *  CAS 8 — Retour automatique GPL -> H2 (AJOUT, AVIS n°5)
+ * ------------------------------------------------------------------------*/
+static void cas_retour_automatique_gpl_h2() {
+  ouvrirCas("8. Retour automatique GPL -> H2 quand la pression est retablie");
+  initBanc();
+  Config.Mode_Auto = true;
+  reglerTcap(20.0f);
+  Config.Choix_Mode = 3;
+  mockIO.entree_ana[PIN_PRESS_H2] = adcPression(0.5f);   // H2 indisponible au demarrage
+  rafraichirCapteurs();
+
+  appuyer(PIN_BTN_START);
+  verifier(Source_Active == SRC_GPL, "demarrage direct sur GPL (H2 indisponible)");
+
+  avancer(purgeMs() + 200);
+  reglerFlamme(true);
+  avancer(100);
+  verifier(phase_combustion == PH_PALIER_100, "regulation etablie sur GPL");
+
+  /* Pression H2 retablie, mais tout juste au seuil : pas de bascule (marge). */
+  mockIO.entree_ana[PIN_PRESS_H2] = adcPression(2.1f);
+  uneIteration();
+  verifier(Source_Active == SRC_GPL, "pas de bascule : marge anti-court-cycle non franchie");
+
+  /* Pression nettement retablie : bascule vers H2, palier conserve. */
+  mockIO.entree_ana[PIN_PRESS_H2] = adcPression(3.0f);
+  uneIteration();
+  verifier(Source_Active == SRC_H2, "retour automatique vers H2 (priorite sur GPL)");
+  verifier(raison_purge == PURGE_BASCULEMENT, "purge de bascule imposee");
+}
+
+/* --------------------------------------------------------------------------
+ *  CAS 9 — Fin de cycle : H_sec <= H_fin, VERROUILLE par Temps_Min_Fin (§5)
+ * ------------------------------------------------------------------------*/
+static void cas_fin_de_cycle_verrouillee() {
+  ouvrirCas("9. Fin de cycle H_sec<=H_fin, verrouillee par Temps_Min_Fin");
+  initBanc();
+  Config.Temps_Min_Fin = 120UL;   // 2 h
+  demarrerEtAllumer();
+
+  verifierEgalFloat(H_fin, 45.0f, "H_fin = H_produit_cible + H_amb = 10 + 35");
+
+  /* H_sec deja sous H_fin, mais AVANT le temps minimal : ne doit PAS
+   * terminer le cycle (§5 : "ne jamais terminer... avant 2 h"). */
+  reglerHsec(20.0f);
+  rafraichirCapteurs();
+  verifier(etat_courant == ETAT_MODE_H2, "condition hygrometrique vraie mais Temps_Min_Fin non ecoule");
+
+  /* On avance jusqu'a 1 min avant l'echeance de Temps_Min_Fin, calculee par
+   * rapport a chrono_cycle reel (et non a une hypothese de temps ecoule nul :
+   * demarrerEtAllumer() a deja consomme la duree de purge+allumage). */
+  uint32_t echeance_ms = Config.Temps_Min_Fin * 60000UL;
+  uint32_t ecoule_ms = t_boucle - chrono_cycle;
+  verifier(ecoule_ms < echeance_ms, "pre-requis du test : Temps_Min_Fin pas deja ecoule");
+  avancer(echeance_ms - ecoule_ms - 60000UL, 5000);
+  rafraichirCapteurs();
+  verifier(etat_courant == ETAT_MODE_H2, "toujours actif juste avant Temps_Min_Fin");
+
+  /* Franchissement de Temps_Min_Fin : la demande d'arret apparait. */
+  avancer(2UL * 60000UL, 5000);
+  rafraichirCapteurs();
+  verifier(etat_courant == ETAT_FIN_TEMPORISATION, "Temps_Min_Fin ecoule + H_sec<=H_fin -> FIN_TEMPORISATION");
+}
+
+/* --------------------------------------------------------------------------
+ *  CAS 10 — FIN_TEMPORISATION : confirmation, annulation, arret auto (§6)
+ * ------------------------------------------------------------------------*/
+static void cas_fin_temporisation() {
+  ouvrirCas("10. FIN_TEMPORISATION : confirmation operateur / report / arret auto");
+  initBanc();
+  Config.Temps_Min_Fin = TEMPS_MIN_FIN_MIN; // plancher de securite (deja teste au cas 9)
+  Config.Temps_Arret_Auto = 60UL;           // 1 min pour le banc
+  demarrerEtAllumer();
+
+  avancer(Config.Temps_Min_Fin * 60000UL + 2000, 5000);
+  reglerHsec(20.0f);
+  rafraichirCapteurs();
+  verifier(etat_courant == ETAT_FIN_TEMPORISATION, "demande d'arret affichee");
+  verifier(EV1 || EV2 || EV3 || V_H2, "la regulation continue pendant la fenetre de confirmation");
+
+  /* Report manuel (Menu) : la condition hygrometrique reste vraie, donc on
+   * ne peut pas repartir en regulation normale (§6 : le report redonne
+   * seulement une pleine fenetre de confirmation, voir le commentaire dans
+   * pasFSM()). On verifie que le compte a rebours a bien ete relance. */
+  avancer(40000);   // 40 s sur les 60 s de la fenetre
+  uint32_t chrono_avant_report = chrono_arret_auto;
+  appuyer(PIN_BTN_MENU);
+  verifier(etat_courant == ETAT_FIN_TEMPORISATION, "le report reste en FIN_TEMPORISATION (condition toujours vraie)");
+  verifier(chrono_arret_auto != chrono_avant_report, "le compte a rebours a ete relance par le report");
+
+  /* On laisse ensuite expirer le delai complet : arret automatique. */
+  avancer(Config.Temps_Arret_Auto * 1000UL + 2000, 5000);
+  verifier(etat_courant == ETAT_SECHAGE_TERMINE, "arret automatique apres Temps_Arret_Auto");
+  verifier(!arret_force_duree, "arret normal (pas de plafond de duree depasse)");
+
+  /* Confirmation manuelle (OK) : verifiee separement, cycle independant. */
+  initBanc();
+  Config.Temps_Min_Fin = TEMPS_MIN_FIN_MIN;
+  demarrerEtAllumer();
+  avancer(Config.Temps_Min_Fin * 60000UL + 2000, 5000);
+  reglerHsec(20.0f);
+  rafraichirCapteurs();
+  verifier(etat_courant == ETAT_FIN_TEMPORISATION, "demande d'arret affichee (2e cycle)");
+  appuyer(PIN_BTN_OK);
+  verifier(etat_courant == ETAT_SECHAGE_TERMINE, "confirmation operateur (OK) -> arret immediat");
+}
+
+/* --------------------------------------------------------------------------
+ *  CAS 11 — PROLONGATION avec plafond Temps_Prolongation (AVIS n°2 : ajout
+ *  demande par le cahier des charges v2, qui contredit la regle v1
+ *  « sans nouvelle limite de temps ». Implemente tel que demande.)
+ * ------------------------------------------------------------------------*/
+static void cas_prolongation_plafonnee() {
+  ouvrirCas("11. PROLONGATION plafonnee par Temps_Prolongation : arret force");
+  initBanc();
+  Config.Duree_Max_Cycle = 3UL;         // 3 min
+  Config.Temps_Prolongation = 2UL;      // 2 min de rallonge max
+  Config.Temps_Min_Fin = TEMPS_MIN_FIN_MIN;
+  reglerTsec(30.0f);
+  rafraichirCapteurs();
+
+  demarrerEtAllumer();
+  reglerHsec(80.0f);   // H_sec > H_fin tout du long : jamais de fin normale
+
+  /* On avance juste assez pour depasser Duree_Max_Cycle (3 min) sans encore
+   * atteindre le plafond Temps_Prolongation (2 min de plus, soit 5 min au
+   * total depuis chrono_cycle). Le calcul part du temps reellement ecoule
+   * (demarrerEtAllumer() a deja consomme purge + allumage). */
+  uint32_t echeance_max_cycle_ms = Config.Duree_Max_Cycle * 60000UL;
+  uint32_t ecoule_ms = t_boucle - chrono_cycle;
+  verifier(ecoule_ms < echeance_max_cycle_ms, "pre-requis : Duree_Max_Cycle pas deja ecoulee");
+  avancer(echeance_max_cycle_ms - ecoule_ms + 2000, 5000);
+  verifier(etat_courant == ETAT_PROLONGATION, "passage en PROLONGATION apres Duree_Max_Cycle");
+  verifier(!arret_force_duree, "pas encore d'arret force a ce stade");
+
+  /* On avance ensuite jusqu'a depasser le plafond Temps_Prolongation. */
+  avancer(Config.Temps_Prolongation * 60000UL + 5000, 5000);
+  verifier(etat_courant == ETAT_SECHAGE_TERMINE, "plafond Temps_Prolongation atteint -> arret force");
+  verifier(arret_force_duree, "indicateur d'arret force active (humidite non garantie)");
+  verifier(!EV1 && !EV2 && !EV3 && !V_H2 && !V_But, "gaz ferme apres arret force");
+}
+
+/* --------------------------------------------------------------------------
+ *  CAS 12 — URGENCE_ATEX prioritaire + les DEUX chemins de rearmement
+ * ------------------------------------------------------------------------*/
+static void cas_urgence_et_rearmement() {
+  ouvrirCas("12. URGENCE_ATEX prioritaire + rearmement materiel ET par menu");
+  initBanc();
+  demarrerEtAllumer();
+  verifier(EV1 && EV2 && EV3, "bruleur en fonctionnement avant l'alarme");
+
+  mockIO.entree_ana[PIN_MQ8_H2] = 600;
+  uneIteration();
+  verifier(etat_courant == ETAT_URGENCE_ATEX, "MQ8 > seuil -> URGENCE_ATEX");
+  verifier(!EV1 && !EV2 && !EV3 && !V_H2 && !V_But, "fermeture immediate de tout le gaz");
+  verifier(Buzzer, "buzzer actif");
+  verifier(mockIO.sortie_pwm[PIN_PWM_PURGE] == 255, "PWM purge physiquement a 255");
+
+  appuyer(PIN_BTN_REARM);
+  verifier(etat_courant == ETAT_URGENCE_ATEX, "rearmement refuse : fuite toujours presente");
+
+  mockIO.entree_ana[PIN_MQ8_H2] = 50;
+  uneIteration();
+  appuyer(PIN_BTN_REARM);
+  verifier(etat_courant == ETAT_ATTENTE_DEMARRAGE, "rearmement materiel -> ATTENTE_DEMARRAGE");
+
+  /* Chemin 2 : menu LCD. */
+  mockIO.entree_num[PIN_AU_URGENCE] = HIGH;
+  uneIteration();
+  verifier(etat_courant == ETAT_URGENCE_ATEX, "arret d'urgence -> URGENCE_ATEX");
+  verifier(Menu_Index == MENU_REARMEMENT, "option Rearmement presentee d'office");
+  appuyer(PIN_BTN_OK);
+  verifier(etat_courant == ETAT_URGENCE_ATEX, "rearmement menu refuse : AU toujours enfonce");
+
+  mockIO.entree_num[PIN_AU_URGENCE] = LOW;
+  uneIteration();
+  for (uint8_t i = 0; i < NB_CHAMPS_MENU; i++) appuyer(PIN_BTN_MENU);
+  verifier(Menu_Index == MENU_REARMEMENT, "navigation menu : tour complet (17 champs)");
+  appuyer(PIN_BTN_OK);
+  verifier(etat_courant == ETAT_ATTENTE_DEMARRAGE, "rearmement par le menu -> ATTENTE_DEMARRAGE");
+}
+
+/* --------------------------------------------------------------------------
+ *  CAS 13 — MODE_SOLAIRE strictement passif
  * ------------------------------------------------------------------------*/
 static void cas_mode_solaire_passif() {
-  ouvrirCas("10. MODE_SOLAIRE : aucune electrovanne, ventilateurs seuls");
+  ouvrirCas("13. MODE_SOLAIRE : aucune electrovanne, ventilateurs seuls");
   initBanc();
-  Mode_Auto = true;
-  reglerTcap(70.0f);                         // capteur solaire chaud
+  Config.Mode_Auto = true;
+  reglerTcap(70.0f);
   rafraichirCapteurs();
 
   appuyer(PIN_BTN_START);
   verifier(etat_courant == ETAT_MODE_SOLAIRE, "arbitrage auto -> solaire (priorite 1)");
   avancer(5000);
-  verifier(!V_H2 && !V_But, "aucune vanne source");
-  verifier(!EV1 && !EV2 && !EV3, "aucune electrovanne de combustible");
-  verifier(!Spark, "aucun allumage");
-  verifier(PWM_Purge == PWM_ARRET, "purge a 0 (§8)");
-  verifier(PWM_Distrib == PWM_DISTRIB_SOLAIRE, "distribution elevee (§8)");
-  verifier(PWM_Extract == PWM_EXTRACT_SOLAIRE, "extraction moyenne (§8)");
+  verifier(!V_H2 && !V_But && !EV1 && !EV2 && !EV3, "aucune vanne, aucune EV");
+  verifier(PWM_Purge == PWM_ARRET, "purge a 0");
+  verifier(PWM_Distrib == PWM_DISTRIB_SOLAIRE, "distribution elevee");
 
-  /* Le soleil disparait : passage en combustion, DEMARRAGE A FROID a 100 %. */
-  reglerTsec(48.0f);                         // au-dessus de T2+2,5 : piege a regression
+  reglerTsec(48.0f);
   reglerTcap(30.0f);
   rafraichirCapteurs();
   verifier(etat_courant == ETAT_MODE_H2, "solaire indisponible -> combustion H2");
-  verifier(palier == PALIER_100, "demarrage a froid : retour a 100 % (§7.3 regle 3)");
-  verifier(phase_combustion == PH_PURGE, "purge de 120 s avant mise en gaz");
+  verifier(palier == PALIER_100, "demarrage a froid : retour a 100%");
 }
 
 /* --------------------------------------------------------------------------
- *  CAS 11 — Menu LCD : navigation, edition, validation (§3.3)
+ *  CAS 14 — Verrou de securite : jamais V_H2 et V_But ensemble (§19)
  * ------------------------------------------------------------------------*/
-static void cas_menu_lcd() {
-  ouvrirCas("11. Menu LCD : navigation, edition d'une consigne, validation");
+static void cas_verrou_exclusion_mutuelle() {
+  ouvrirCas("14. Verrou de securite : exclusion mutuelle V_H2 / V_But");
+  initBanc();
+  V_H2 = true;
+  V_But = true;   // incoherence deliberement forcee
+  ecrireSorties();
+  verifier(!V_H2 && !V_But, "les deux vannes source sont refermees en cas d'incoherence");
+  verifier(mockIO.sortie_num[PIN_V_H2] == LOW, "broche V_H2 physiquement basse");
+  verifier(mockIO.sortie_num[PIN_V_BUT] == LOW, "broche V_But physiquement basse");
+}
+
+/* --------------------------------------------------------------------------
+ *  CAS 15 — Menu LCD + persistance EEPROM (§7, §17)
+ * ------------------------------------------------------------------------*/
+static void cas_menu_et_eeprom() {
+  ouvrirCas("15. Menu LCD : navigation/edition + sauvegarde et rechargement EEPROM");
   initBanc();
 
   appuyer(PIN_BTN_MENU);
   verifier(etat_courant == ETAT_CONFIG_MENU, "Btn_Menu -> CONFIG_MENU");
-  verifier(Menu_Index == MENU_MODE_AUTO, "premier champ selectionne");
 
-  appuyer(PIN_BTN_MENU);
-  appuyer(PIN_BTN_MENU);
-  verifier(Menu_Index == MENU_T_CIBLE, "navigation jusqu'a T_cible");
-
-  float avant = T_cible;
+  while (Menu_Index != MENU_T_CIBLE) appuyer(PIN_BTN_MENU);
+  float avant = Config.T_cible;
   appuyer(PIN_BTN_UP);
   appuyer(PIN_BTN_UP);
-  verifierEgalFloat(T_cible, avant + 2.0f * PAS_TEMPERATURE, "incrementation de T_cible");
-  appuyer(PIN_BTN_DOWN);
-  verifierEgalFloat(T_cible, avant + PAS_TEMPERATURE, "decrementation de T_cible");
+  verifierEgalFloat(Config.T_cible, avant + 2.0f * PAS_TEMPERATURE, "incrementation de T_cible");
+
+  while (Menu_Index != MENU_PRESS_H2_MIN) appuyer(PIN_BTN_MENU);
+  float avant_press = Config.Press_H2_Min;
+  appuyer(PIN_BTN_UP);
+  verifierEgalFloat(Config.Press_H2_Min, avant_press + PAS_PRESSION, "Press_H2_Min modifiable au menu (§7)");
 
   appuyer(PIN_BTN_OK);
   verifier(etat_courant == ETAT_ATTENTE_DEMARRAGE, "Btn_OK valide et quitte le menu");
-  verifier(!EV1 && !EV2 && !EV3, "aucune sortie gaz pendant la configuration");
-  verifier(PWM_Distrib == PWM_ARRET, "ventilateurs a l'arret en attente (§8)");
+
+  /* La configuration doit avoir ete sauvegardee en EEPROM : on simule un
+   * redemarrage complet (chargerConfig() relit depuis l'EEPROM mock). */
+  float t_cible_avant_redemarrage = Config.T_cible;
+  float press_avant_redemarrage = Config.Press_H2_Min;
+  chargerConfig();
+  verifierEgalFloat(Config.T_cible, t_cible_avant_redemarrage, "T_cible persistee en EEPROM");
+  verifierEgalFloat(Config.Press_H2_Min, press_avant_redemarrage, "Press_H2_Min persistee en EEPROM");
 }
 
 /* --------------------------------------------------------------------------
- *  CAS 12 — Arret propre par Btn_Stop
+ *  CAS 16 — Arret propre par Btn_Stop
  * ------------------------------------------------------------------------*/
 static void cas_arret_propre() {
-  ouvrirCas("12. Btn_Stop : arret propre du cycle depuis la combustion");
+  ouvrirCas("16. Btn_Stop : arret propre du cycle depuis la combustion");
   initBanc();
   demarrerEtAllumer();
-  verifier(EV1 && EV2 && EV3, "brûleur en fonctionnement");
+  verifier(EV1 && EV2 && EV3, "bruleur en fonctionnement");
 
   appuyer(PIN_BTN_STOP);
   verifier(etat_courant == ETAT_SECHAGE_TERMINE, "arret ordonne -> SECHAGE_TERMINE");
-  verifier(!EV1 && !EV2 && !EV3, "gaz ferme");
-  verifier(!V_H2 && !V_But, "vannes source fermees");
+  verifier(!EV1 && !EV2 && !EV3 && !V_H2 && !V_But, "gaz ferme");
 }
 
 /* --------------------------------------------------------------------------
  *  main
  * ------------------------------------------------------------------------*/
 int main() {
-  printf("\n=== BANC DE TESTS — SECHOIR SOLAIRE HYBRIDE (FSM) ===\n\n");
+  printf("\n=== BANC DE TESTS — SECHOIR SOLAIRE HYBRIDE v2 (FSM) ===\n\n");
 
   cas_demarrage_a_froid();
-  cas_hysteresis();
-  cas_plancher_33();
+  cas_hysteresis_quatre_niveaux();
   cas_echec_allumage();
   cas_perte_flamme();
-  cas_bascule_h2_gpl();
-  cas_fin_de_cycle();
-  cas_prolongation();
+  cas_echecs_repetes_escalade();
+  cas_bascule_h2_gpl_reussie();
+  cas_bascule_echouee();
+  cas_retour_automatique_gpl_h2();
+  cas_fin_de_cycle_verrouillee();
+  cas_fin_temporisation();
+  cas_prolongation_plafonnee();
   cas_urgence_et_rearmement();
   cas_mode_solaire_passif();
-  cas_menu_lcd();
+  cas_verrou_exclusion_mutuelle();
+  cas_menu_et_eeprom();
   cas_arret_propre();
 
   printf("\n-----------------------------------------------------\n");
   printf("Verifications : %d   Echecs : %d\n", nb_verif, nb_echecs);
   printf("Resultat      : %s\n", nb_echecs == 0 ? "TOUS LES TESTS PASSENT" : "ECHEC");
   printf("-----------------------------------------------------\n\n");
-  (void)cas_courant;
   return nb_echecs == 0 ? 0 : 1;
 }

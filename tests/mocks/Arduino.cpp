@@ -3,15 +3,17 @@
 #include "DHT.h"
 #include "LiquidCrystal_I2C.h"
 #include "Wire.h"
+#include "EEPROM.h"
 
-MockArduino mockIO;
-SerieMock   Serial;
-TwoWire     Wire;
+MockArduino  mockIO;
+SerieMock    Serial;
+TwoWire      Wire;
+EEPROMClass  EEPROM;
 
 float       mock_ds18b20[NB_SONDES_MOCK];
 float       mock_dht_temp[NB_BROCHES_MOCK];
 float       mock_dht_hum[NB_BROCHES_MOCK];
-std::string mock_lcd_lignes[2];
+std::string mock_lcd_lignes[NB_LIGNES_LCD_MOCK];
 
 void MockArduino::reinitialiser() {
   horloge_ms = 0;
@@ -81,14 +83,13 @@ void LiquidCrystal_I2C::begin() {}
 void LiquidCrystal_I2C::backlight() {}
 void LiquidCrystal_I2C::noBacklight() {}
 void LiquidCrystal_I2C::clear() {
-  mock_lcd_lignes[0].clear();
-  mock_lcd_lignes[1].clear();
+  for (uint8_t i = 0; i < NB_LIGNES_LCD_MOCK; i++) mock_lcd_lignes[i].clear();
   colonne_ = 0;
   ligne_ = 0;
 }
 void LiquidCrystal_I2C::setCursor(uint8_t col, uint8_t ligne) {
   colonne_ = col;
-  ligne_ = (ligne < 2) ? ligne : 1;
+  ligne_ = (ligne < NB_LIGNES_LCD_MOCK) ? ligne : (NB_LIGNES_LCD_MOCK - 1);
 }
 void LiquidCrystal_I2C::print(const char* texte) {
   std::string& cible = mock_lcd_lignes[ligne_];

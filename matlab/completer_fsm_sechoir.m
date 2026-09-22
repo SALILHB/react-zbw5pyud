@@ -72,7 +72,7 @@ end
 function chart = trouverChart(modelName, chartPath)
     rt = sfroot;
     allCharts = rt.find('-isa', 'Stateflow.Chart');
-    chart = Stateflow.Chart.empty;
+    chart = [];
     fullPath = [modelName '/' chartPath];
     for i = 1:numel(allCharts)
         if strcmp(allCharts(i).Path, fullPath)
@@ -84,7 +84,7 @@ end
 
 function s = trouverEtat(parent, nom)
     % parent : Stateflow.Chart ou Stateflow.State
-    s = Stateflow.State.empty;
+    s = [];
     enfants = parent.find('-isa', 'Stateflow.State', '-depth', 1);
     for i = 1:numel(enfants)
         if strcmp(strtrim(nomSansActions(enfants(i).LabelString)), nom)
@@ -102,7 +102,7 @@ function n = nomSansActions(labelString)
 end
 
 function d = trouverDonnee(chart, nom)
-    d = Stateflow.Data.empty;
+    d = [];
     donnees = chart.find('-isa', 'Stateflow.Data');
     for i = 1:numel(donnees)
         if strcmp(donnees(i).Name, nom)
@@ -247,13 +247,20 @@ function completerEtatsSimples(chart)
         fprintf('  [entry ajoutee] %s\n', nom);
     end
 
-    % during: du chart lui-meme (H_fin recalcule en continu, §5 du CdC)
-    duringExistant = chart.LabelString;
-    if isempty(duringExistant) || ~contains(duringExistant, 'H_fin = H_produit')
-        chart.LabelString = 'during: H_fin = H_produit + H_amb;';
-        fprintf('  [during ajoute au chart] H_fin = H_produit + H_amb;\n');
+    % during: sur FONCTIONNEMENT_NORMAL (H_fin recalcule en continu, §5 du
+    % CdC), pas sur le chart lui-meme : Stateflow.Chart n'a pas de garantie
+    % documentee de supporter LabelString comme un etat -- FONCTIONNEMENT_
+    % NORMAL est un vrai Stateflow.State (deja utilise avec succes ailleurs
+    % dans ce script) dont le during: s'execute quel que soit le sous-etat
+    % actif, ce qui produit exactement le meme effet.
+    fn = trouverEtat(chart, 'FONCTIONNEMENT_NORMAL');
+    if isempty(fn)
+        fprintf('  [FONCTIONNEMENT_NORMAL introuvable, during H_fin non ajoute]\n');
+    elseif contains(fn.LabelString, 'during:')
+        fprintf('  [during de FONCTIONNEMENT_NORMAL deja present]\n');
     else
-        fprintf('  [during du chart deja present]\n');
+        fn.LabelString = sprintf('%s\nduring: H_fin = H_produit + H_amb;', nomSansActions(fn.LabelString));
+        fprintf('  [during ajoute sur FONCTIONNEMENT_NORMAL] H_fin = H_produit + H_amb;\n');
     end
 end
 
@@ -375,7 +382,7 @@ function ajouterSousMachineCombustion(chart, nomParent)
 end
 
 function s = trouverEtatEnfant(parentState, nom)
-    s = Stateflow.State.empty;
+    s = [];
     enfants = parentState.find('-isa', 'Stateflow.State', '-depth', 1);
     for i = 1:numel(enfants)
         if strcmp(strtrim(nomSansActions(enfants(i).LabelString)), nom)

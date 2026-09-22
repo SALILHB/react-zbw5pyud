@@ -16,9 +16,15 @@ sous forme de modèle Simulink pour la validation par simulation (mémoire).
 1. Ouvrir `Commande_Sechoir_Hybride.slx` dans MATLAB/Simulink.
 2. Exécuter `completer_fsm_sechoir` (ou `completer_fsm_sechoir('AutreNomDeModele')`
    si le modèle a été renommé).
-3. Dans Simulink : clic droit sur le chart → **Update Chart**.
-4. Recâbler manuellement les entrées manquantes du sous-système `FSM`
-   (voir `docs/FSM_SIMULINK.md`, Avis n°2).
+3. Si le script affiche `[STRUCTURE INCOMPLETE]` : le reparentage
+   automatique de `MODE_SOLAIRE`/`MODE_H2`/`MODE_GPL`/`PROLONGATION`/
+   `FIN_TEMPORISATION` dans les nouvelles régions parallèles `SOURCE`/
+   `PHASE` a échoué sur votre version de MATLAB. Glissez-déposez ces 5
+   états dans les boîtes `SOURCE`/`PHASE` correspondantes dans l'éditeur
+   Stateflow, puis relancez le script (idempotent) pour compléter le reste.
+4. Dans Simulink : clic droit sur le chart → **Update Chart**.
+5. Recâbler manuellement les entrées manquantes du sous-système `FSM`
+   (voir `docs/FSM_SIMULINK.md`, dictionnaire de données §2).
 
 ## ⚠️ Important
 

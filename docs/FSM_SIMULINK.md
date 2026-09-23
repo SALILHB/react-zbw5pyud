@@ -1,506 +1,348 @@
-# Séchoir solaire hybride — Modèle Simulink/Stateflow de la commande
+# Séchoir solaire hybride — Modèle Simulink/Stateflow de la commande (v3)
 
-Ce document est la spécification complète de la partie **FSM** du modèle
-`Commande_Sechoir_Hybride.slx` (le sous-système « FSM », son chart
-Stateflow, ses données et ses transitions). Il est écrit pour **correspondre
-exactement au firmware Arduino** `sechoir_hybride/sechoir_hybride.ino` : le
-firmware est la source de vérité en cas de conflit (Model-Based Design à
-l'envers du sens habituel ici — la mémoire suivra le code, pas l'inverse).
+Spécification de la partie **FSM** du modèle `Commande_Sechoir_Hybride.slx`
+(sous-système « FSM », chart Stateflow, données, transitions), construite par
+`matlab/completer_fsm_sechoir.m`. Elle reproduit **exactement** le firmware
+Arduino `sechoir_hybride/sechoir_hybride.ino` v3, qui est la source de vérité
+(voir `docs/FSM_SECHOIR.md` §0 pour les décisions de la v3).
 
-Les sous-systèmes `CONVERSION_PUISSANCE` (palier → puissance) et
-`MODELE_THERMIQUE` (réponse thermique de la chambre) existent déjà dans le
-modèle et ne sont pas repris ici, sauf pour rappeler leur interface avec le
-chart FSM (§8).
-
-Ce document sert de référence à `matlab/completer_fsm_sechoir.m`, qui
-construit automatiquement tout ce qui suit via l'API Stateflow. Si le script
-bute sur une limitation d'API dans votre version de MATLAB, ce document
-contient tout le nécessaire pour compléter le chart **à la main** dans
-l'éditeur Stateflow.
+Les sous-systèmes `CONVERSION_PUISSANCE` et `MODELE_THERMIQUE` ne sont pas
+modifiés (§9).
 
 ---
 
-## 0. Révision majeure : régions parallèles SOURCE / PHASE
+## 0. Corrections par rapport à la version précédente du script
 
-Une revue croisée (script précédent vs. lecture directe du firmware) a
-montré que `PROLONGATION` et `FIN_TEMPORISATION`, modélisés comme de simples
-OR-siblings de `MODE_SOLAIRE`/`MODE_H2`/`MODE_GPL`, **arrêtaient de facto la
-régulation de combustion** dès qu'on y entrait — alors que le firmware
-(`etapeRegulation(bool synchroniser)`, appelée avec `synchroniser=false`
-depuis `ETAT_PROLONGATION` et `ETAT_FIN_TEMPORISATION`) continue d'exécuter
-`arbitrageSource()` puis `etapeSolaire()`/`gererCombustion()` **sans aucune
-interruption**, quel que soit l'état affiché.
+La version précédente (commit `bacc6c0`) n'a jamais été exécutée ; une
+relecture complète du `.slx` d'origine a montré qu'elle **n'aurait pas
+fonctionné**. Ne l'utilisez pas. Erreurs corrigées :
 
-Corrigé par une décomposition **AND (parallèle)** de `FONCTIONNEMENT_NORMAL`
-en deux régions indépendantes :
-
-```
-FONCTIONNEMENT_NORMAL   (Decomposition = PARALLEL_AND)
-├── SOURCE   (OR)  — laquelle des 3 sources est active, avec sa propre
-│                    sous-machine PURGE/ALLUMAGE/REGULATION
-│     ├── MODE_SOLAIRE
-│     ├── MODE_H2  (PURGE/ALLUMAGE/REGULATION)
-│     ├── MODE_GPL (PURGE/ALLUMAGE/REGULATION)
-│     └── ERREUR_COMBUSTION
-└── PHASE    (OR)  — ce qui est affiché/confirmé, indépendamment de la source
-      ├── NORMAL          (= etat_courant ∈ {SOLAIRE,H2,GPL} côté firmware)
-      ├── PROLONGATION
-      └── FIN_TEMPORISATION
-```
-
-Cette structure reproduit fidèlement `etapeRegulation()` : entrer dans
-`PROLONGATION` (région PHASE) ne touche pas à la région SOURCE, qui continue
-son cycle PURGE→ALLUMAGE→REGULATION (ou son fonctionnement solaire) sans
-interruption — exactement le comportement du firmware.
-
-**Alternative envisagée et écartée** : dupliquer entièrement la sous-machine
-SOURCE (solaire + H2 + GPL, avec leurs PURGE/ALLUMAGE/REGULATION) une
-deuxième fois dans `PROLONGATION` et une troisième fois dans
-`FIN_TEMPORISATION`. Écartée car le firmware confirme que `Source_Active`
-peut valoir solaire pendant ces deux phases (aucune restriction) : la
-duplication aurait dû reproduire l'intégralité de la région SOURCE deux fois
-de plus, un risque de divergence bien plus grave qu'une primitive Stateflow
-non vérifiée.
-
-**Risque assumé et signalé** : `Decomposition='PARALLEL_AND'` et le
-reparentage programmatique (`.Parent =`, avec repli sur l'API historique
-`sf('set', id, '.parent', ...)`) de `MODE_SOLAIRE`/`MODE_H2`/`MODE_GPL`/
-`PROLONGATION`/`FIN_TEMPORISATION` **n'ont pas été testés dans une vraie
-session MATLAB**. Si l'un des deux échoue, `completer_fsm_sechoir.m`
-l'indique clairement (`[STRUCTURE INCOMPLETE]` / `[ECHEC reparentage...]`)
-et propose un repli manuel : glisser-déposer les 5 états dans les nouvelles
-boîtes `SOURCE`/`PHASE` dans l'éditeur Stateflow, puis relancer le script
-(idempotent), qui complète alors automatiquement tout ce qui en dépend
-(`ERREUR_COMBUSTION`, transitions de fin de cycle, `Duree_Max_Cycle`).
+| Erreur de la version précédente | Réalité du modèle / correction |
+|---|---|
+| `FONCTIONNEMENT_NORMAL` rendu parallèle (AND) | Il contient aussi `ATTENTE_DEMARRAGE` et `SECHAGE_TERMINE` : ils seraient devenus des régions parallèles. → nouvel état **`EN_CYCLE`** (AND) à l'intérieur de `FONCTIONNEMENT_NORMAL`, qui reste OR. |
+| Actions écrites en syntaxe C (`if (x) { y }`) | Le chart est en **langage d'action MATLAB** (`actionLanguage = 2`). → toute la syntaxe est MATLAB (`if x, y; end`, `~=`, `~in(...)`). |
+| Variables temporaires non déclarées (`ECART_MIN`, `delta`, `demi`) | Interdit en Stateflow. → expressions écrites en ligne. |
+| « `URGENCE_ATEX` inatteignable » | **Faux** : la transition d'origine SSID 118 (`FONCTIONNEMENT_NORMAL` → `URGENCE_ATEX`, fuite ou AU) existe. Elle est conservée, pas dupliquée. |
+| Renommage `AU_Manuel` → `AU_Urgence` | Aurait créé une entrée non câblée. Le port du modèle s'appelle **`AU_Manuel`** (= `AU_Urgence` du firmware) : conservé. |
+| `after(Temps_Min_Fin*60, sec)` | `Temps_Min_Fin` vaut 7200 **secondes** dans le modèle : ×60 aurait donné 120 h. → toutes les durées du chart sont en **secondes**. |
+| `Mode_Auto_Eff` recopié depuis `Mode_Auto` à chaque entrée dans `ATTENTE_DEMARRAGE` | Annulait le choix MANUEL fait en `ERREUR_COMBUSTION`. → recopie seulement quand l'**entrée** `Mode_Auto` change. |
+| Sous-états placés hors de la boîte de leur parent | Stateflow déduit la hiérarchie de l'inclusion graphique. → mise en page complète (§1). |
+| « La transition la plus interne est prioritaire » | **Faux** : Stateflow évalue d'abord les transitions sortantes du parent (les plus externes). Sans conséquence ici (même destination), mais la doc est corrigée (§5). |
 
 ---
 
-## 1. Hiérarchie d'états
+## 1. Hiérarchie d'états et mise en page
 
 ```
 FSM/Chart
-│
-├── ATTENTE_DEMARRAGE        (état initial, tout fermé)
-│
-├── FONCTIONNEMENT_NORMAL (AND-state, deux régions parallèles)
-│     during: H_fin = H_produit + H_amb;      (recalculé en continu, quelle
-│                                               que soit la combinaison de
-│                                               sous-états actifs)
-│     │
-│     ├── SOURCE (OR)
-│     │     entry: T_init / calculer_seuils / palier=100% — UNE FOIS par
-│     │            cycle (voir §3)
-│     │     │
-│     │     ├── MODE_SOLAIRE             (passif : aucune électrovanne)
-│     │     ├── MODE_H2                  ┐
-│     │     │     ├── PURGE              │ sous-machine de combustion,
-│     │     │     ├── ALLUMAGE           │ IDENTIQUE dans MODE_H2 et MODE_GPL
-│     │     │     └── REGULATION         │ (palier 100/67/33/0 %)
-│     │     ├── MODE_GPL                 ┘
-│     │     │     ├── PURGE
-│     │     │     ├── ALLUMAGE
-│     │     │     └── REGULATION
-│     │     └── ERREUR_COMBUSTION   (basculement raté ou échecs d'allumage
-│     │                              répétés ; menu REESSAYER/MANUEL/
-│     │                              AUTOMATIQUE)
-│     │
-│     └── PHASE (OR)
-│           ├── NORMAL             (= etat_courant ∈ {SOLAIRE,H2,GPL})
-│           ├── PROLONGATION       (Duree_Max_Cycle dépassée, régulation
-│           │                       poursuivie par la région SOURCE)
-│           └── FIN_TEMPORISATION  (demande d'arrêt : confirmation, report,
-│                                   annulation auto ou arrêt auto)
-│
-├── SECHAGE_TERMINE          (cycle terminé, normal ou forcé)
-│
-└── URGENCE_ATEX             (priorité absolue, accessible depuis
-                              ATTENTE_DEMARRAGE, FONCTIONNEMENT_NORMAL
-                              [couvre SOURCE/PHASE/ERREUR_COMBUSTION en tant
-                              que descendants] et SECHAGE_TERMINE)
+├── FONCTIONNEMENT_NORMAL (OR)            [20 20 1040 920]
+│   entry, during : acquisition (grandeurs FIXE/AUTO, T_cap_est, H_fin,
+│                   repère FROID/CHAUD, synchro Mode_Auto)
+│   ├── ATTENTE_DEMARRAGE                 [60 60 180 80]
+│   ├── EN_CYCLE (AND — deux régions parallèles)   [40 170 1000 750]
+│   │   entry : demarrerCycle()     during : t_cycle, seuils, Etat_LCD
+│   │   ├── SOURCE (région 1)             [60 200 640 700]
+│   │   │   ├── MODE_SOLAIRE              [80 240 200 90]
+│   │   │   ├── ERREUR_COMBUSTION         [320 240 360 90]
+│   │   │   ├── MODE_H2                   [80 360 600 250]
+│   │   │   │   ├── PURGE → ALLUMAGE → REGULATION
+│   │   │   └── MODE_GPL                  [80 630 600 250]
+│   │   │       ├── PURGE → ALLUMAGE → REGULATION
+│   │   └── PHASE (région 2)              [720 200 300 700]
+│   │       ├── NORMAL                    [740 240 260 80]
+│   │       ├── DEMANDE_PROLONGATION      [740 360 260 250]  (ex-FIN_TEMPORISATION)
+│   │       └── PROLONGATION              [740 630 260 250]
+│   └── SECHAGE_TERMINE                   [860 60 180 80]
+└── URGENCE_ATEX                          [20 980 320 150]
 ```
 
-Correspondance avec le firmware : chaque état porte le nom de la valeur
-`enum EtatFSM` correspondante. `PURGE`/`ALLUMAGE`/`REGULATION` correspondent
-aux valeurs de `enum PhaseCombustion` — `REGULATION` regroupe ici
-`PH_PALIER_100`/`PH_PALIER_67`/`PH_PALIER_33`, la distinction étant portée
-par la variable `palier`, pas par des sous-états séparés (même
-simplification que dans `gererCombustion()`). `NORMAL`/`PROLONGATION`/
-`FIN_TEMPORISATION` correspondent directement à `etat_courant`, mais
-uniquement pour la partie « affichage/confirmation » : la partie « quelle
-source, quelle phase de combustion » est intégralement portée par SOURCE,
-en parallèle.
+Positions `[x y largeur hauteur]` en coordonnées du chart. **Repli manuel** si
+le script affiche `[HIERARCHIE INCORRECTE]` : dans l'éditeur Stateflow, faites
+glisser chaque état signalé dans sa boîte parente, réglez `EN_CYCLE` en
+décomposition *AND (parallel)* (clic droit > Decomposition), puis relancez le
+script.
+
+Pourquoi deux régions parallèles : dans le firmware, `DEMANDE_PROLONGATION` et
+`PROLONGATION` appellent `etapeRegulation(false)` — la source et la combustion
+continuent de tourner pendant que l'écran pose la question. `SOURCE` modélise
+« quelle énergie et quelle phase de combustion », `PHASE` modélise « où en est
+le cycle » ; aucune des deux n'interrompt l'autre.
 
 ---
 
-## 2. Dictionnaire de données du chart
+## 2. Dictionnaire de données
 
-Tous les noms ci-dessous sont ceux **déjà utilisés dans `sechoir_hybride.ino`**
-(sans le préfixe `Config.`).
+**Toutes les durées du chart sont en secondes.** Le menu du firmware affiche
+certaines durées en minutes : multiplier par 60.
 
-### 2.1 Entrées (`Scope = Input`)
+### 2.1 Entrées (`Input`)
 
-| Nom | Type | Correspond à |
+| Nom | Origine | Correspond à (firmware) |
 |---|---|---|
-| `Btn_Start` | uint8 | `frontPris(B_START)` |
-| `Btn_Stop` | uint8 | `frontPris(B_STOP)` |
-| `Btn_OK` | uint8 | `frontPris(B_OK)` |
-| `Btn_Rearm` | uint8 | `frontPris(B_REARM)` — **ajouté** : chemin de réarmement physique manquant du chart précédent (seul `Btn_OK` était câblé) |
-| `Mode_Auto` | uint8 | `Config.Mode_Auto` (lu une seule fois, en entrée d'`ATTENTE_DEMARRAGE`, vers `Mode_Auto_Eff` — voir §2.3) |
-| `Choix_Manuel` | uint8 | `Config.Choix_Mode` (1=Solaire, 2=H2, 3=GPL) |
-| `T_sec`, `H_sec` | double | `T_sec`, `H_sec` (mesures chambre) |
-| `T_cap`, `T_amb`, `H_amb` | double | `T_cap`, `T_amb`, `H_amb` |
-| `T_cible` | double | `Config.T_cible` |
-| `T_init_saisie` | double | valeur de démarrage saisie par l'opérateur en mode manuel — **ajouté** (voir §3, `T_init` était sinon figé à 25 en manuel) |
-| `H_produit` | double | `Config.H_produit_cible` |
-| `Press_H2` | double | `Press_H2` |
-| `Press_H2_Min` | double | `Config.Press_H2_Min` |
-| `MQ8_H2`, `MQ6_But` | double | `MQ8_H2`, `MQ6_But` |
-| `Seuil_MQ8`, `Seuil_MQ6` | double | `Config.Seuil_MQ8`, `Config.Seuil_MQ6` |
-| `Flame` | uint8 | `Flame` |
-| `AU_Urgence` | uint8 | `AU_Urgence` — **renommé** depuis `AU_Manuel` (probable erreur de frappe : `causeUrgencePresente()` teste bien `AU_Urgence` dans le firmware ; à vérifier contre le port réel du sous-système) |
+| `Btn_Start`, `Btn_OK`, `Btn_UP`, `Btn_DOWN` | modèle d'origine | boutons START, OK, UP, DOWN |
+| `Btn_SELECT` | modèle d'origine | bouton MENU (défilement des choix d'erreur) |
+| `Btn_Stop`, `Btn_Rearm` | **ajoutées** (2 ports à câbler) | boutons STOP et RÉARMEMENT |
+| `Mode_Auto`, `Choix_Manuel` | modèle d'origine | `Config.Mode_Auto`, `Config.Choix_Mode` |
+| `T_cible`, `H_produit` | modèle d'origine | `Config.T_cible`, `Config.H_produit_cible` |
+| `Tps_Prolongation` | modèle d'origine | `Config.Prolong_Defaut` — **en secondes** (1800 = 30 min) |
+| `T_sec`, `H_sec`, `T_amb`, `H_amb`, `Press_H2` | modèle d'origine | mesures |
+| `MQ8_H2`, `MQ6_But`, `Flame`, `AU_Manuel` | modèle d'origine | sécurité (`AU_Manuel` = `AU_Urgence`) |
+| `T_cap`, `Btn_Prolongation`, `H_initial` | modèle d'origine | **inutilisées** en v3 (`T_cap` remplacée par `T_cap_est`) |
 
-### 2.2 Sorties (`Scope = Output`)
+### 2.2 Sorties (`Output`, modèle d'origine)
 
-| Nom | Type | Correspond à |
+`V_H2`, `V_But`, `V_Fl_1..3` (= EV1..3), `Spark`, `PWM_Purge`, `PWM_Inj`
+(= `PWM_Distrib`), `PWM_Ext` (= `PWM_Extract`), `Buzzer`, `Etat_LCD`
+(0 attente, 2 solaire, 3 H2, 4 GPL, 5 demande, 6 prolongation, 7 terminé,
+8 erreur, 9 urgence — mêmes codes que `enum EtatFSM`).
+
+### 2.3 Paramètres (`Local`, valeur initiale réglable dans le Model Explorer)
+
+| Nom | Défaut | Firmware |
 |---|---|---|
-| `V_H2`, `V_But` | uint8 | `V_H2`, `V_But` |
-| `V_Fl_1`, `V_Fl_2`, `V_Fl_3` | uint8 | `EV1`, `EV2`, `EV3` |
-| `Spark` | uint8 | `Spark` |
-| `PWM_Purge`, `PWM_Inj`, `PWM_Ext` | uint8 | `PWM_Purge`, `PWM_Distrib`, `PWM_Extract` |
-| `Buzzer` | uint8 | `Buzzer` |
-| `Etat_LCD` | uint8 | `Etat_LCD` |
+| `T_init_manuel` | 25 °C | `Config.T_init` (mode manuel) |
+| `Hhyst` *(origine)* | 5 °C | `Config.Hhyst` |
+| `Temps_Min_Fin` *(origine)* | 7200 s | `Config.Temps_Min_Fin` (120 min) |
+| `Duree_Max_Cycle` | 36000 s | `Config.Duree_Max_Cycle` (600 min) |
+| `Temps_Reponse` | 300 s | `Config.Temps_Reponse` |
+| `Temps_Purge`, `Temps_Allumage` | 120 s, 4 s | idem |
+| `Periode_Regul` | 1 s | `Config.Periode_Regul` |
+| `Regul_Auto`, `Palier_Impose` | 1, 1 (67 %) | idem |
+| `DeltaT_Sol`, `Marge_Sol`, `Hyst_Sol` | 20, 0, 5 °C | idem |
+| `Seuil_Chaud` | 40 °C | `Config.Seuil_Chaud` |
+| `Press_H2_Min`, `Marge_Retour_H2` | 2 bar, 0,5 bar | idem |
+| `Seuil_MQ8`, `Seuil_MQ6` | 350 | idem (utilisés par la transition d'origine 118, jusque-là non déclarés) |
+| `Fixe_T_amb/H_amb/H_sec/Press`, `Val_…` | 0 (AUTO), 25/40/60/5 | grandeurs FIXE/AUTO |
+| `MAX_ECHECS`, `MAX_PERTES_FLAMME` | 3, 1 | constantes firmware |
+| `T_SEC_MAX_SECURITE`, `DELAI_FLAMME_PARASITE` | 90 °C, 5 s | constantes firmware |
 
-### 2.3 Données locales (`Scope = Local`)
+### 2.4 Variables internes (`Local`)
 
-| Nom | Type | Défaut | Correspond à |
-|---|---|---|---|
-| `T1_seuil`, `T2_seuil`, `T3_seuil` | double | 0 | `T1`, `T2`, `T3` |
-| `T_init` | double | 25 | `Config.T_init` — écrit désormais par l'`entry:` de `SOURCE` (voir §3), plus par chaque transition individuellement |
-| `Hhyst` | double | 5 | `Config.Hhyst` |
-| `H_fin` | double | 0 | `H_fin` (recalculé en continu) |
-| `palier` | uint8 | 0 | `palier` (0=100 %, 1=67 %, 2=33 %, 3=0 %) |
-| `Source_Active` | uint8 | 0 | `Source_Active` (0=Solaire, 1=H2, 2=GPL) |
-| `raison_purge` | uint8 | 0 | `raison_purge` (0=Démarrage, 1=Échec, 2=Basculement, 3=Palier0) |
-| `nb_echecs_allumage` | uint16 | 0 | `nb_echecs_allumage` |
-| `MAX_ECHECS` | uint16 | 3 | `MAX_ECHECS_AVANT_ALARME` |
-| `Choix_Erreur` | uint8 | 0 | `Choix_Erreur` (0=Réessayer, 1=Manuel, 2=Automatique) |
-| `raison_erreur_combustion` | uint8 | 1 | `raison_erreur_combustion` (0=ERR_BASCULEMENT, 1=ERR_ALLUMAGE_REPETE) — **ajouté**, absent du chart précédent |
-| `Mode_Auto_Eff` | uint8 | 0 | miroir local de `Mode_Auto`, resynchronisé à chaque entrée dans `ATTENTE_DEMARRAGE` — **ajouté** : écrire directement dans `Mode_Auto` (Input) est illégal en Stateflow |
-| `Btn_SELECT_prev` | uint8 | 0 | mémorisation pour détection de front sur `Btn_SELECT` — **ajouté** (voir §4.3) |
-| `palier0_stable` | uint8 | 0 | vrai si `palier==3` depuis ≥60 s (voir §4.2, PURGE) — **ajouté**, remplace un `after(60,sec)` mal placé dans une garde composite |
-| `arret_force_duree` | uint8 | 0 | `arret_force_duree` |
-| `Seuil_Tcap_ON`, `Seuil_Tcap_OFF` | double | 55 / 45 | `SEUIL_T_CAP_SOLAIRE_ON/OFF` |
-| `T_SEC_MAX_SECURITE` | double | 90 | `T_SEC_MAX_SECURITE` — **ajouté** (constante nommée, remplace un littéral `90`) |
-| `Marge_Retour_H2` | double | 0,5 | `MARGE_RETOUR_H2` |
-| `Temps_Purge` | double | 120 | `Config.Temps_Purge` (s — déjà en secondes côté firmware, `*1000UL`) |
-| `Temps_Allumage` | double | 4 | `Config.Temps_Allumage` (s, idem) |
-| `Temps_Min_Fin` | double | — | `Config.Temps_Min_Fin` (**minutes** côté firmware, `*60000UL`) — supposé déjà présent dans le `.slx` fourni ; utilisé via `after(Temps_Min_Fin*60,sec)` (voir remarque unités ci-dessous) |
-| `Temps_Arret_Auto` | double | 300 | `Config.Temps_Arret_Auto` (s — déjà en secondes, `*1000UL`) |
-| `Temps_Prolongation` | double | — | `Config.Temps_Prolongation` (**minutes**, `*60000UL`) — supposé présent dans le `.slx` fourni ; utilisé via `after(Temps_Prolongation*60,sec)` |
-| `Duree_Max_Cycle` | double | 600 | `Config.Duree_Max_Cycle` (**minutes**, `*60000UL` — changé de 36000 s à 600 min pour la même valeur réelle de 10 h) ; utilisé via `after(Duree_Max_Cycle*60,sec)` |
-
-> **Remarque unités (corrigée, portée élargie)** : une revue précédente
-> n'avait signalé le mésalignement minutes/secondes que pour
-> `Temps_Prolongation`. La lecture directe du firmware
-> (`pasFSM()`/`conditionFinDeCycle()`) montre que **`Duree_Max_Cycle` et
-> `Temps_Min_Fin` sont eux aussi stockés en minutes** dans `Config`
-> (`* 60000UL`), alors que `Temps_Purge`, `Temps_Allumage` et
-> `Temps_Arret_Auto` sont bien en secondes (`* 1000UL`). Les trois premiers
-> sont donc utilisés dans le chart via `after(X*60, sec)` ; si
-> `Temps_Min_Fin`/`Temps_Prolongation` sont déjà câblés depuis un bloc
-> `Constant` exprimé en minutes dans le `.slx` fourni, ce facteur `*60` est
-> correct tel quel — vérifiez simplement qu'aucune conversion n'est déjà
-> faite en amont (double conversion sinon).
-
----
-
-## 3. Fonctions partagées — **inlinées**, pas de `Stateflow.EMLFunction`
-
-`Stateflow.EMLFunction` s'est révélée indisponible dans la session MATLAB
-réelle testée. La logique est donc **écrite directement** dans chaque
-action d'état/transition qui en a besoin, dupliquée entre `MODE_H2` et
-`MODE_GPL` (équivalent du paramètre booléen `utiliseH2` de
-`gererCombustion()`, resté factorisé côté C++).
-
-**`fermer_gaz`** :
-```matlab
-V_H2=uint8(0); V_But=uint8(0); V_Fl_1=uint8(0); V_Fl_2=uint8(0); V_Fl_3=uint8(0); Spark=uint8(0);
-```
-
-**`appliquer_palier`** :
-```matlab
-V_Fl_1=uint8(palier==0); V_Fl_2=uint8(palier==0||palier==1); V_Fl_3=uint8(palier~=3);
-```
-
-**`calculer_seuils`** :
-```matlab
-ECART_MIN=3;
-if T_cible<=T_init+ECART_MIN
-  T1_seuil=T_cible; T2_seuil=T_cible; T3_seuil=T_cible;
-else
-  delta=T_cible-T_init;
-  T1_seuil=T_init+delta/3; T2_seuil=T_init+2*delta/3; T3_seuil=T_cible;
-end
-```
-
-**`gerer_palier`** :
-```matlab
-demi=Hhyst/2;
-switch palier
-  case 0
-    if T_sec >= T1_seuil + demi, palier = uint8(1); end
-  case 1
-    if T_sec >= T2_seuil + demi
-      palier = uint8(2);
-    elseif T_sec < T1_seuil - demi
-      palier = uint8(0);
-    end
-  case 2
-    if T_sec >= T3_seuil + demi
-      palier = uint8(3);
-    elseif T_sec < T2_seuil - demi
-      palier = uint8(1);
-    end
-end
-if palier ~= 3
-  V_Fl_1=uint8(palier==0); V_Fl_2=uint8(palier==0||palier==1); V_Fl_3=uint8(palier~=3);
-end
-```
-
-**`entry:` de `SOURCE`** — **nouveau**, remplace le calcul de `T_init`/seuils
-qui était (partiellement) dupliqué dans chaque transition de démarrage.
-S'exécute une seule fois par cycle (`SOURCE` n'est réactivée qu'au
-`Btn_Start`, jamais lors d'un basculement H2↔GPL ni d'une reprise depuis
-`ERREUR_COMBUSTION`, ces transitions restant internes à la région) :
-```matlab
-if (Mode_Auto_Eff==0) { T_init=T_init_saisie; } else { T_init=T_sec; }
-ECART_MIN=3; if T_cible<=T_init+ECART_MIN, T1_seuil=T_cible; T2_seuil=T_cible; T3_seuil=T_cible;
-else delta=T_cible-T_init; T1_seuil=T_init+delta/3; T2_seuil=T_init+2*delta/3; T3_seuil=T_cible; end
-palier=uint8(0); raison_purge=uint8(0); nb_echecs_allumage=uint16(0);
-```
-Couvre aussi bien les 3 démarrages automatiques que les 3 démarrages manuels
-— y compris les 2 transitions manuelles **préexistantes** du `.slx` fourni
-(solaire/H2), que le script ne modifie pas directement.
-
----
-
-## 4. Code de chaque état
-
-### 4.1 États simples (entry uniquement)
-
-| État | `entry:` |
+| Nom | Rôle |
 |---|---|
-| `ATTENTE_DEMARRAGE` | `fermer_gaz` `PWM_Purge=uint8(0); PWM_Inj=uint8(0); PWM_Ext=uint8(0); Buzzer=uint8(0); Etat_LCD=uint8(0); Mode_Auto_Eff=Mode_Auto;` |
-| `MODE_SOLAIRE` | `fermer_gaz` `PWM_Purge=uint8(0); PWM_Inj=uint8(220); PWM_Ext=uint8(150); Etat_LCD=uint8(2);` |
-| `PROLONGATION` | `Etat_LCD=uint8(5);` |
-| `FIN_TEMPORISATION` | `Etat_LCD=uint8(6);` |
-| `SECHAGE_TERMINE` | `fermer_gaz` `PWM_Purge=uint8(0); PWM_Inj=uint8(0); PWM_Ext=uint8(90);` |
-| `URGENCE_ATEX` | `fermer_gaz` `PWM_Purge=uint8(255); PWM_Inj=uint8(0); PWM_Ext=uint8(255); Buzzer=uint8(1); Etat_LCD=uint8(9);` |
-
-`FONCTIONNEMENT_NORMAL` (le super-état AND lui-même) :
-```
-during: H_fin = H_produit + H_amb;
-```
-(s'exécute à chaque pas quelle que soit la combinaison de sous-états actifs
-dans les deux régions — inchangé par la restructuration parallèle.)
-
-### 4.2 Sous-machine de combustion (`MODE_H2` et `MODE_GPL`, identique, sous `SOURCE`)
-
-Pour `MODE_H2` : `actionVanne = 'V_H2=uint8(1); V_But=uint8(0);'`
-Pour `MODE_GPL` : `actionVanne = 'V_H2=uint8(0); V_But=uint8(1);'`
-
-```
-PURGE  (état initial de la sous-machine, transition par défaut sans source)
-  entry: fermer_gaz  Spark=uint8(0); PWM_Purge=uint8(255); PWM_Inj=uint8(60); PWM_Ext=uint8(200); palier0_stable=uint8(0);
-  during: if (raison_purge==3 && after(60,sec)) { palier0_stable=uint8(1); }
-
-ALLUMAGE
-  entry: <actionVanne> appliquer_palier  Spark=uint8(1); palier0_stable=uint8(0);
-
-REGULATION
-  entry: <actionVanne>
-  during: gerer_palier
-```
-
-`palier0_stable` remplace la garde composite `(palier==3 && after(60,sec))`
-qui figurait auparavant dans la condition de fin de cycle : `after()` mesure
-le temps depuis l'entrée dans l'état source de la transition qui le porte,
-pas depuis qu'une variable a changé de valeur — il ne peut donc pas mesurer
-« depuis que `palier` vaut 3 » s'il est écrit sur une transition qui part
-d'ailleurs. Le sourcer directement dans `PURGE` (état réellement (ré)entré
-au moment précis où `palier` devient 3, via la transition `REGULATION` →
-`PURGE` avec `raison_purge=3`) mesure la bonne durée nativement.
-
-### 4.3 `ERREUR_COMBUSTION` (sibling de `MODE_SOLAIRE`/`MODE_H2`/`MODE_GPL`, sous `SOURCE`)
-
-```
-entry: fermer_gaz  Buzzer=uint8(1); PWM_Purge=uint8(255); Choix_Erreur=uint8(0);
-during: if (Btn_SELECT==1 && Btn_SELECT_prev==0) { Choix_Erreur = mod(Choix_Erreur+uint8(1), uint8(3)); }
-        Btn_SELECT_prev = Btn_SELECT;
-```
-
-Détection de front ajoutée sur `Btn_SELECT` (`Btn_SELECT_prev`) : sans elle,
-`Choix_Erreur` défilait en boucle tant que le bouton restait maintenu
-(niveau, pas front) — corrigé.
+| `T_amb_e`, `H_amb_e`, `H_sec_e`, `Press_e` | grandeurs effectives (mesure, ou valeur fixe saisie) |
+| `T_cap_est` | `T_amb_e + DeltaT_Sol` |
+| `H_fin` *(origine)* | `min(H_produit + H_amb_e, 95)` |
+| `T_init`, `T1_seuil`, `T2_seuil` *(origine)*, `T3_seuil` | seuils de palier |
+| `regime_chaud` | repère FROID (0) / CHAUD (1) |
+| `Mode_Auto_Eff`, `Mode_Auto_prev` | mode effectif (le choix fait en erreur prime jusqu'au prochain changement du sélecteur) |
+| `palier` | 0 = 100 %, 1 = 67 %, 2 = 33 %, 3 = 0 % |
+| `Source_Active` | 0 solaire, 1 H2, 2 GPL |
+| `raison_purge` | 0 démarrage, 1 échec, 2 bascule, 3 palier 0 % |
+| `nb_echecs_allumage`, `nb_pertes_flamme` | compteurs |
+| `Choix_Erreur`, `Btn_SELECT_prev`, `Btn_UP_prev`, `Btn_DOWN_prev` | menus et fronts |
+| `cause_urgence` | 1 fuite H2, 2 fuite GPL, 3 AU, 4 perte flamme, 5 flamme parasite |
+| `post_purge` | post-purge après retour au solaire |
+| `t_cycle`, `t_derniere_regul` | temps depuis Btn_Start ; dernière comparaison de régulation |
+| `motif_demande`, `humidite_deja_atteinte`, `duree_prolongation` | fin de cycle |
 
 ---
 
-## 5. Table complète des transitions
+## 3. Actions des états (langage d'action MATLAB)
 
-### 5.1 Sous-machine de combustion (communes à MODE_H2/MODE_GPL)
+Blocs réutilisés :
+
+- **`fermer_gaz`** : `V_H2=uint8(0); V_But=uint8(0); V_Fl_1=uint8(0); V_Fl_2=uint8(0); V_Fl_3=uint8(0); Spark=uint8(0);`
+- **`appliquer_palier`** : `V_Fl_1=uint8(palier==0); V_Fl_2=uint8(palier==0 || palier==1); V_Fl_3=uint8(palier~=3);`
+- **`ventil_palier`** : `PWM_Purge=60` ; `PWM_Inj/PWM_Ext` = 255/200 (100 %), 210/165 (67 %), 165/130 (33 %).
+- **`calculer_seuils`** : `T1 = T_init + (T_cible−T_init)/3`, `T2 = T_init + 2(T_cible−T_init)/3`, `T3 = T_cible` (tous = `T_cible` si `T_cible <= T_init + 3`).
+- **`palier_initial`** : palier imposé si `Regul_Auto==0` ; sinon 100 % en FROID ; en CHAUD, palier selon `T_sec` (< T1 : 100 %, < T2 : 67 %, < T3 : 33 %, sinon 0 %) ; `raison_purge = 3` si 0 % (veille), sinon 0.
+
+| État | Actions |
+|---|---|
+| `FONCTIONNEMENT_NORMAL` | `entry, during:` grandeurs effectives, `T_cap_est`, `H_fin`, repère FROID/CHAUD (bande ±`Hhyst`/2 autour de `Seuil_Chaud`), `if Mode_Auto ~= Mode_Auto_prev, Mode_Auto_Eff = Mode_Auto; …` |
+| `ATTENTE_DEMARRAGE` | `entry:` fermer_gaz, PWM à 0, `Buzzer=0`, `Etat_LCD=0` |
+| `EN_CYCLE` | `entry:` `T_init` (= `T_sec` en auto, `T_init_manuel` sinon), calculer_seuils, `regime_chaud = (T_sec >= Seuil_Chaud)`, compteurs à 0, `t_cycle=0`, palier_initial. `during:` `t_cycle = temporalCount(sec)`, calculer_seuils (T_cible modifiable en cycle), `Etat_LCD` selon les sous-états actifs |
+| `MODE_SOLAIRE` | `entry, during:` fermer_gaz, `Source_Active=0` ; post-purge (255/60/200) pendant `Temps_Purge` après un retour depuis la combustion, sinon ventilation solaire (0/220/150) |
+| `MODE_H2` / `MODE_GPL` | `entry:` `Source_Active = 1` / `2` |
+| `PURGE` | `entry:` fermer_gaz, ventilation de purge 255/60/200 |
+| `ALLUMAGE` | `entry:` vanne source, appliquer_palier, `Spark=1`, ventil_palier |
+| `REGULATION` | `entry:` vanne source, `t_derniere_regul=0`. `during:` palier imposé, **ou** gerer_palier toutes les `Periode_Regul` s ; si `palier ~= 3` : appliquer_palier + ventil_palier. Le gaz n'est **jamais** fermé ici au 0 % (voir §4.3) |
+| `ERREUR_COMBUSTION` | `entry:` fermer_gaz, `Buzzer=1`, ventilation 255/0/200, `Choix_Erreur=0`. `during:` défilement des 3 choix sur **front** de `Btn_SELECT` |
+| `NORMAL`, `PROLONGATION` | aucune action |
+| `DEMANDE_PROLONGATION` | `entry:` mémorisation de UP/DOWN (fronts). `during:` si l'humidité arrive pendant la question, `motif_demande = 0` |
+| `SECHAGE_TERMINE` | `entry:` fermer_gaz, PWM 0/0/90, `Buzzer=0`, `Etat_LCD=7` |
+| `URGENCE_ATEX` | `entry:` fermer_gaz, 255/0/255, `Buzzer=1`, `Etat_LCD=9`, `cause_urgence` (si pas déjà fixée par une transition flamme : AU, sinon fuite H2, sinon fuite GPL). `during:` fermer_gaz |
+
+---
+
+## 4. Transitions
+
+`ERR` désigne `in(EN_CYCLE.SOURCE.ERREUR_COMBUSTION)`. L'ordre des lignes est
+l'ordre de création, qui est aussi l'ordre d'évaluation entre transitions
+issues du même état.
+
+### 4.1 Sécurité et fin de cycle globale
+
+| Source → Destination | Condition | Action |
+|---|---|---|
+| `FONCTIONNEMENT_NORMAL` → `URGENCE_ATEX` *(origine, SSID 118)* | `MQ8_H2 >= Seuil_MQ8 \|\| MQ6_But >= Seuil_MQ6 \|\| AU_Manuel == 1` | — |
+| `FONCTIONNEMENT_NORMAL` → `URGENCE_ATEX` | `duration(Flame==1 && V_H2==0 && V_But==0) >= DELAI_FLAMME_PARASITE` | `cause_urgence=5` |
+| `URGENCE_ATEX` → `ATTENTE_DEMARRAGE` | `(Btn_OK \|\| Btn_Rearm) && MQ8_H2 < Seuil_MQ8 && MQ6_But < Seuil_MQ6 && AU_Manuel==0 && Flame==0` | `Buzzer=0; palier=0; raison_purge=0; cause_urgence=0` |
+| `EN_CYCLE` → `SECHAGE_TERMINE` | `Btn_Stop==1` | fermer_gaz |
+| `EN_CYCLE` → `SECHAGE_TERMINE` | `T_sec >= T_SEC_MAX_SECURITE && ~ERR` | fermer_gaz |
+| `SECHAGE_TERMINE` → `ATTENTE_DEMARRAGE` | `after(300, sec) \|\| Btn_Start==1` | — |
+
+### 4.2 Démarrage et arbitrage de source (région SOURCE)
+
+`SOL` = `(T_sec >= Seuil_Chaud && T_cap_est >= T_cible+Marge_Sol−Hyst_Sol) || T_cap_est >= T_cible+Marge_Sol`
+(au démarrage : FROID → seuil ON seul, CHAUD → solaire accepté dès OFF).
+
+| Source → Destination | Condition | Action |
+|---|---|---|
+| *(défaut)* → `MODE_SOLAIRE` | — | — (sécurité : jamais de gaz par défaut) |
+| `ATTENTE` → `MODE_SOLAIRE` *(origine 119, manuel)* | `Btn_Start && Mode_Auto_Eff==0 && Choix_Manuel==1` | — (garde alignée sur `Mode_Auto_Eff` par le script) |
+| `ATTENTE` → `MODE_H2` *(origine 120, manuel)* | `Btn_Start && Mode_Auto_Eff==0 && Choix_Manuel==2` | — (idem) |
+| `ATTENTE` → `MODE_SOLAIRE` | `Btn_Start && Mode_Auto_Eff==1 && SOL` | — |
+| `ATTENTE` → `MODE_H2` | `Btn_Start && Mode_Auto_Eff==1 && ~SOL && Press_e >= Press_H2_Min` | — |
+| `ATTENTE` → `MODE_GPL` | `Btn_Start && Mode_Auto_Eff==1 && ~SOL && Press_e < Press_H2_Min` | — |
+| `ATTENTE` → `MODE_GPL` | `Btn_Start && Mode_Auto_Eff==0 && Choix_Manuel==3` | — |
+| `MODE_H2` → `MODE_SOLAIRE` | `Mode_Auto_Eff==1 && T_cap_est >= T_cible+Marge_Sol` | fermer_gaz ; `post_purge=1` |
+| `MODE_GPL` → `MODE_SOLAIRE` | idem | idem |
+| `MODE_SOLAIRE` → `MODE_H2` | `Mode_Auto_Eff==1 && ~MAINTIEN && Press_e >= Press_H2_Min` | `post_purge=0; nb_echecs=0;` palier_initial |
+| `MODE_SOLAIRE` → `MODE_GPL` | idem avec `Press_e < Press_H2_Min` | idem |
+| `MODE_H2` → `MODE_GPL` | `Mode_Auto_Eff==1 && Press_e < Press_H2_Min` | `raison_purge=2; nb_echecs=0` (palier **conservé**) |
+| `MODE_GPL` → `MODE_H2` | `Mode_Auto_Eff==1 && Press_e >= Press_H2_Min + Marge_Retour_H2` | idem |
+
+`MAINTIEN` = seuil pour garder le solaire : ON en FROID, OFF en CHAUD.
+
+### 4.3 Combustion (identique sous `MODE_H2` et `MODE_GPL`)
 
 | Source → Destination | Condition | Action |
 |---|---|---|
 | *(défaut)* → `PURGE` | — | — |
-| `PURGE` → `ALLUMAGE` | `after(Temps_Purge,sec) && (raison_purge~=3 \|\| T_sec<T3_seuil-Hhyst/2)` | `if(raison_purge==3){palier=2;}` |
-| `ALLUMAGE` → `REGULATION` | `Flame==1` | `Spark=0; nb_echecs_allumage=0;` |
-| `ALLUMAGE` → `ERREUR_COMBUSTION` | `after(Temps_Allumage,sec) && Flame==0 && raison_purge==2` | `raison_erreur_combustion=0;` *(ERR_BASCULEMENT, échec de bascule : escalade immédiate)* |
-| `ALLUMAGE` → `PURGE` | `after(Temps_Allumage,sec) && Flame==0 && raison_purge~=2 && (nb_echecs_allumage+1)<MAX_ECHECS` | `nb_echecs_allumage++; raison_purge=1;` |
-| `ALLUMAGE` → `ERREUR_COMBUSTION` | `after(Temps_Allumage,sec) && Flame==0 && (nb_echecs_allumage+1)>=MAX_ECHECS` | `nb_echecs_allumage++; raison_erreur_combustion=1;` *(ERR_ALLUMAGE_REPETE)* |
-| `REGULATION` → `PURGE` | `Flame==0 && (nb_echecs_allumage+1)<MAX_ECHECS` | `nb_echecs_allumage++; raison_purge=1;` |
-| `REGULATION` → `PURGE` | `palier==3` *(coupure volontaire, consigne atteinte)* | `raison_purge=3;` |
+| `PURGE` → `ALLUMAGE` | `after(Temps_Purge,sec) && (raison_purge ~= 3 \|\| T_sec < T3_seuil − Hhyst/2)` | `if raison_purge==3, palier=2; end` |
+| `ALLUMAGE` → `REGULATION` | `Flame==1` | `Spark=0; nb_echecs=0` |
+| `ALLUMAGE` → `PURGE` | `after(Temps_Allumage,sec) && Flame==0 && nb_echecs+1 < MAX_ECHECS` | `nb_echecs++; raison_purge=1` |
+| `ALLUMAGE` → `ERREUR_COMBUSTION` | `after(Temps_Allumage,sec) && Flame==0 && nb_echecs+1 >= MAX_ECHECS` | `nb_echecs++` |
+| `REGULATION` → `PURGE` | `Flame==0 && nb_pertes_flamme < MAX_PERTES_FLAMME` | fermer_gaz ; `nb_pertes_flamme++; raison_purge=1` (relance) |
+| `REGULATION` → `URGENCE_ATEX` | `Flame==0 && nb_pertes_flamme >= MAX_PERTES_FLAMME` | `cause_urgence=4` |
+| `REGULATION` → `PURGE` | `palier==3` | `raison_purge=3` (coupure volontaire, veille) |
 
-**Corrigé** (hors-par-un) : le firmware incrémente `nb_echecs_allumage`
-**puis** teste `>= MAX_ECHECS_AVANT_ALARME`. Le chart précédent testait
-`< MAX_ECHECS` **avant** d'incrémenter, ce qui autorisait une tentative de
-plus que le firmware avant d'escalader. Les gardes ci-dessus comparent
-`(nb_echecs_allumage+1)` au seuil pour reproduire exactement l'ordre du
-firmware (escalade au 3ᵉ échec avec `MAX_ECHECS=3`).
+Le contrôle de flamme est créé **avant** la coupure au 0 % : c'est l'ordre du
+firmware (flamme vérifiée d'abord). Comme `REGULATION` ne ferme jamais le gaz
+lui-même, la flamme est encore présente quand `[palier==3]` est évaluée : une
+coupure volontaire n'est jamais prise pour une panne.
 
-**Supprimé** : `REGULATION → ERREUR_COMBUSTION` (« perte de flamme
-répétée »). C'était du code mort — vérifié dans le firmware lui-même, pas
-une particularité de la traduction Stateflow : `nb_echecs_allumage` est
-systématiquement remis à 0 par l'unique transition qui mène à `REGULATION`
-(`ALLUMAGE → REGULATION`), donc une première perte de flamme ne peut jamais
-l'amener directement à `MAX_ECHECS` (≥2) ; toute reprise ultérieure repasse
-par `ALLUMAGE`, qui gère lui-même l'escalade.
-
-### 5.2 `ERREUR_COMBUSTION`
+### 4.4 `ERREUR_COMBUSTION`
 
 | Destination | Condition | Action |
 |---|---|---|
-| `MODE_H2` | `Btn_OK==1 && (Choix_Erreur==0\|\|Choix_Erreur==2) && Source_Active==1` | `if(Choix_Erreur==2){Mode_Auto_Eff=1;} nb_echecs_allumage=0; if(raison_erreur_combustion==0){raison_purge=2;}else{raison_purge=1;}` |
-| `MODE_GPL` | `Btn_OK==1 && (Choix_Erreur==0\|\|Choix_Erreur==2) && Source_Active==2` | *(idem)* |
-| `ATTENTE_DEMARRAGE` | `Btn_OK==1 && Choix_Erreur==1` | `Mode_Auto_Eff=0; Buzzer=0;` |
-| `SECHAGE_TERMINE` | `Btn_Stop==1` | `Buzzer=0;` `fermer_gaz` |
+| `MODE_H2` | `Btn_OK && (Choix_Erreur==0 \|\| Choix_Erreur==2) && Source_Active==1` | `if Choix_Erreur==2, Mode_Auto_Eff=1; end; nb_echecs=0; raison_purge=1; Buzzer=0` |
+| `MODE_GPL` | idem avec `Source_Active==2` | idem |
+| `ATTENTE_DEMARRAGE` | `Btn_OK && Choix_Erreur==1` | `Mode_Auto_Eff=0; Buzzer=0` |
+| `SECHAGE_TERMINE` | `Btn_Stop==1` | `Buzzer=0` |
 
-**Corrigé** : `Mode_Auto` (Input) → `Mode_Auto_Eff` (Local), l'écriture dans
-un Input étant illégale en Stateflow (bloquant à la compilation). **Corrigé**
-également : `raison_purge` ne vaut plus systématiquement `2` (bascule) au
-retour — il suit `raison_erreur_combustion` (`2` si l'erreur venait d'un
-échec de bascule, `1` sinon), redonnant un jeu complet de `MAX_ECHECS`
-tentatives après un échec d'allumage ordinaire au lieu d'une seule.
+### 4.5 Région PHASE (fin de cycle)
 
-### 5.3 Transitions prioritaires
-
-| Source → Destination | Condition | Action | Remarque |
-|---|---|---|---|
-| `ATTENTE_DEMARRAGE` → `URGENCE_ATEX` | `MQ8_H2>Seuil_MQ8 \|\| MQ6_But>Seuil_MQ6 \|\| AU_Urgence==1` | — | **ajouté** |
-| `FONCTIONNEMENT_NORMAL` → `URGENCE_ATEX` | *(idem)* | — | **ajouté** — couvre tout le cycle, y compris `ERREUR_COMBUSTION` (descendant) |
-| `SECHAGE_TERMINE` → `URGENCE_ATEX` | *(idem)* | — | **ajouté** |
-| `FONCTIONNEMENT_NORMAL` → `SECHAGE_TERMINE` | `Btn_Stop==1` | `fermer_gaz` | garde `in(...)` retirée : inutile, la source de la transition suffit à restreindre son évaluation |
-| `FONCTIONNEMENT_NORMAL` → `SECHAGE_TERMINE` | `T_sec>=T_SEC_MAX_SECURITE` | `fermer_gaz` | idem |
-| `PROLONGATION` → `SECHAGE_TERMINE` | `after(Temps_Prolongation*60,sec)` | `arret_force_duree=1; fermer_gaz` | unité minutes → `*60` |
-| `NORMAL` → `FIN_TEMPORISATION` | `after(Temps_Min_Fin*60,sec) && (H_sec<=H_fin \|\| palier0_stable==1)` | — | source = `NORMAL` (région PHASE), pas `FONCTIONNEMENT_NORMAL` |
-| `PROLONGATION` → `FIN_TEMPORISATION` | `H_sec<=H_fin \|\| palier0_stable==1` | — | pas de garde `Temps_Min_Fin` : déjà vraie par construction si `Duree_Max_Cycle>=Temps_Min_Fin` (voir §2.3) |
-| `FIN_TEMPORISATION` → `FIN_TEMPORISATION` | `Btn_Menu==1` | — | **ajouté** : « report », auto-transition qui réinitialise le chronomètre `Temps_Arret_Auto` par sortie/réentrée standard |
-| `FIN_TEMPORISATION` → `NORMAL` | `H_sec>H_fin && palier0_stable==0` | — | **ajouté** : annulation automatique si la condition de fin redevient fausse |
-| `FIN_TEMPORISATION` → `SECHAGE_TERMINE` | `Btn_OK==1 \|\| Btn_Stop==1` | `fermer_gaz` | confirmation opérateur |
-| `FIN_TEMPORISATION` → `SECHAGE_TERMINE` | `after(Temps_Arret_Auto,sec)` | `fermer_gaz` | arrêt automatique |
-| `NORMAL` → `PROLONGATION` | `after(Duree_Max_Cycle*60,sec)` | — | source = `NORMAL`, unité minutes → `*60` |
-| `URGENCE_ATEX` → `ATTENTE_DEMARRAGE` | `(Btn_OK==1\|\|Btn_Rearm==1) && MQ8_H2<=Seuil_MQ8 && MQ6_But<=Seuil_MQ6 && AU_Urgence==0` | `Buzzer=0; palier=0; raison_purge=0;` | **corrigé** : ciblait à tort `FONCTIONNEMENT_NORMAL` — le firmware repart de `ATTENTE_DEMARRAGE`, l'opérateur doit rappuyer sur Start ; chemin `Btn_Rearm` ajouté |
-
-**Découverte majeure** (lecture directe du firmware, absente de toute revue
-précédente) : le chart précédent ne modélisait **que la sortie** de
-`URGENCE_ATEX` (le réarmement) — aucune transition n'y **entrait**. L'état
-le plus critique du système (arrêt d'urgence ATEX) était donc totalement
-inatteignable dans le modèle Simulink. Corrigé par les 3 premières lignes
-du tableau ci-dessus. Si un état `CONFIG_MENU` existe dans le `.slx` fourni
-(non géré par ce script), ajoutez-y la même garde à la main.
-
-### 5.4 Arbitrage de source (mode automatique, région `SOURCE`)
+`HUM` = `t_cycle >= Temps_Min_Fin && H_sec_e <= H_fin`.
 
 | Source → Destination | Condition | Action |
 |---|---|---|
-| *(déjà présent)* `ATTENTE_DEMARRAGE` → `MODE_SOLAIRE` | `Btn_Start==1 && Mode_Auto==0 && Choix_Manuel==1` | *(vérifier `Mode_Auto`→`Mode_Auto_Eff`, non modifié par le script)* |
-| *(déjà présent)* `ATTENTE_DEMARRAGE` → `MODE_H2` | `Btn_Start==1 && Mode_Auto==0 && Choix_Manuel==2` | *(idem)* |
-| `ATTENTE_DEMARRAGE` → `MODE_GPL` | `Btn_Start==1 && Mode_Auto_Eff==0 && Choix_Manuel==3` | — |
-| `ATTENTE_DEMARRAGE` → `MODE_SOLAIRE` | `Btn_Start==1 && Mode_Auto_Eff==1 && T_cap>=Seuil_Tcap_ON` | — |
-| `ATTENTE_DEMARRAGE` → `MODE_H2` | `Btn_Start==1 && Mode_Auto_Eff==1 && T_cap<Seuil_Tcap_ON && Press_H2>=Press_H2_Min` | — |
-| `ATTENTE_DEMARRAGE` → `MODE_GPL` | `Btn_Start==1 && Mode_Auto_Eff==1 && T_cap<Seuil_Tcap_ON && Press_H2<Press_H2_Min` | — |
-| `MODE_H2` → `MODE_SOLAIRE` | `Mode_Auto_Eff==1 && T_cap>=Seuil_Tcap_ON` | `raison_purge=0;` |
-| `MODE_GPL` → `MODE_SOLAIRE` | `Mode_Auto_Eff==1 && T_cap>=Seuil_Tcap_ON` | `raison_purge=0;` |
-| `MODE_SOLAIRE` → `MODE_H2` | `Mode_Auto_Eff==1 && T_cap<Seuil_Tcap_OFF && Press_H2>=Press_H2_Min` | `palier=0; raison_purge=0;` |
-| `MODE_SOLAIRE` → `MODE_GPL` | `Mode_Auto_Eff==1 && T_cap<Seuil_Tcap_OFF && Press_H2<Press_H2_Min` | *(idem)* |
-| `MODE_H2` → `MODE_GPL` | `Mode_Auto_Eff==1 && Press_H2<Press_H2_Min` | `raison_purge=2;` *(palier **conservé**)* |
-| `MODE_GPL` → `MODE_H2` | `Mode_Auto_Eff==1 && Press_H2>=Press_H2_Min+Marge_Retour_H2` | `raison_purge=2;` *(retour auto, marge anti-court-cycle)* |
-
-**Corrigé** (zone morte de démarrage à froid) : `demarrerCycle()` dans le
-firmware n'utilise **que** `Seuil_Tcap_ON` pour le premier arbitrage à froid
-(`T_cap>=ON → solaire ; sinon combustion`) — jamais `Seuil_Tcap_OFF` à ce
-stade (l'hystérèse ON/OFF ne s'applique qu'en cours de cycle, via
-`arbitrageSource()`). Le chart précédent utilisait `Seuil_Tcap_OFF` pour les
-3 transitions de démarrage automatique, créant une zone morte
-`T_cap ∈ [OFF,ON)` où `Btn_Start` ne produisait aucune transition. Corrigé :
-les 3 transitions de démarrage automatique utilisent désormais uniquement
-`Seuil_Tcap_ON`.
-
-**T_init/seuils** : ne sont plus calculés dans ces transitions (redondant
-avec l'`entry:` de `SOURCE`, voir §3) — simplifié.
-
-**Résidu signalé, non corrigé automatiquement** : les 2 transitions
-manuelles préexistantes (solaire/H2) ne sont pas modifiées par ce script
-(il ne touche jamais une transition qu'il n'a pas lui-même créée). Si elles
-testent encore `Mode_Auto==0` plutôt que `Mode_Auto_Eff==0`, corrigez-les à
-la main dans l'éditeur Stateflow pour rester cohérent avec le reste du
-chart (impact limité : ne joue que dans le cas de récupération
-« AUTOMATIQUE » depuis `ERREUR_COMBUSTION`).
+| *(défaut)* → `NORMAL` | — | — |
+| `DEMANDE_PROLONGATION` → `NORMAL` | `ERR` | — (le firmware repasse par MODE_x après une erreur) |
+| `PROLONGATION` → `NORMAL` | `ERR` | — |
+| `NORMAL` → `DEMANDE_PROLONGATION` | `~ERR && HUM` | `motif=0; humidite_deja_atteinte=1; duree=Tps_Prolongation` |
+| `NORMAL` → `DEMANDE_PROLONGATION` | `~ERR && t_cycle >= Duree_Max_Cycle` | `motif=1; duree=Tps_Prolongation` |
+| `DEMANDE` → `PROLONGATION` | `Btn_OK==1` | — |
+| `DEMANDE` → `SECHAGE_TERMINE` | `Btn_Stop==1` | fermer_gaz |
+| `DEMANDE` → `SECHAGE_TERMINE` | `after(Temps_Reponse, sec)` | fermer_gaz (fin sans réponse, 0 %) |
+| `DEMANDE` → `DEMANDE` | front de `Btn_UP` | `duree = min(duree+300, 43200)` (la boucle relance aussi le délai de réponse) |
+| `DEMANDE` → `DEMANDE` | front de `Btn_DOWN` | `duree = max(duree−300, 300)` |
+| `PROLONGATION` → `DEMANDE` | `humidite_deja_atteinte==0 && HUM` | `motif=0; humidite_deja_atteinte=1; duree=Tps_Prolongation` |
+| `PROLONGATION` → `DEMANDE` | `after(duree_prolongation, sec)` | `motif=2; duree=Tps_Prolongation` |
 
 ---
 
-## 6. Notes d'implémentation Stateflow
+## 5. Règles Stateflow à connaître (pour modifier le chart à la main)
 
-- **Régions parallèles et priorité des transitions internes** : une
-  transition sourcée sur `FONCTIONNEMENT_NORMAL` lui-même sort/rentre dans
-  les **deux** régions (SOURCE et PHASE) — à réserver aux transitions qui
-  doivent réellement tout réinitialiser (urgence, arrêt propre,
-  surchauffe). Toute transition qui ne doit affecter qu'une seule région
-  (fin de cycle, `Duree_Max_Cycle`, report/annulation de
-  `FIN_TEMPORISATION`) doit être sourcée **depuis l'intérieur de cette
-  région** (`NORMAL`, `PROLONGATION`, `FIN_TEMPORISATION`), jamais depuis le
-  bord de `FONCTIONNEMENT_NORMAL` — sans quoi Stateflow force la
-  sortie/réentrée de la région SOURCE et perd son sous-état actif.
-- **Priorité entre transition interne et transition de bord** : quand une
-  transition sourcée sur `FONCTIONNEMENT_NORMAL` et une transition locale à
-  un état imbriqué (ex. `FIN_TEMPORISATION`/`ERREUR_COMBUSTION` gérant
-  `Btn_Stop` elles-mêmes) sont valides simultanément, Stateflow donne
-  toujours la priorité à la transition la plus profonde — pas besoin de
-  garde `in(...)` d'exclusion explicite.
-- **`in(NomEtat)`** : opérateur Stateflow natif, syntaxe non quotée.
-- **`after(N, sec)`** : relatif à l'entrée dans l'état **source de la
-  transition qui le porte** — jamais « depuis qu'une variable a changé »
-  (voir §4.2 sur `palier0_stable`) ni « depuis le début du cycle » sauf si
-  la transition est sourcée exactement sur l'état entré une fois par cycle
-  (`SOURCE`, `NORMAL`).
-- **Duplication assumée** : `PURGE`/`ALLUMAGE`/`REGULATION` existent en
-  double (`MODE_H2`/`MODE_GPL`) — équivalent du paramètre `utiliseH2` de
-  `gererCombustion()`, resté factorisé côté C++.
-- **Reparentage programmatique non vérifié** : voir §0.
+- **Priorité** : à chaque pas, Stateflow évalue d'abord les transitions qui
+  **sortent** de l'état parent, puis celles de ses enfants. L'urgence (bord de
+  `FONCTIONNEMENT_NORMAL`) passe donc avant tout le reste, puis Stop et
+  surchauffe (bord de `EN_CYCLE`), puis les transitions internes. Entre
+  transitions issues du même état : ordre de création (ou `ExecutionOrder`).
+- **Transitions qui ne doivent toucher qu'une région** (fin de cycle,
+  prolongation) : toujours tracées **à l'intérieur** de `PHASE`, jamais depuis
+  le bord de `EN_CYCLE`, qui ferait sortir puis rentrer les deux régions (la
+  combustion repartirait de zéro).
+- **`after(N, sec)`** mesure le temps depuis l'entrée dans l'état **source** de
+  la transition. **`temporalCount(sec)`** donne ce temps dans une action
+  d'état (utilisé pour `t_cycle`). **`duration(C)`** donne le temps depuis que
+  la condition `C` est vraie sans interruption (flamme parasite).
+- **`in(A.B)`** : nom qualifié, résolu en remontant la hiérarchie depuis le
+  parent de la transition.
+- **Une entrée (`Input`) ne peut jamais être écrite** : d'où `Mode_Auto_Eff`.
 
-## 7. Invariant de configuration à respecter
+---
 
-`Duree_Max_Cycle >= Temps_Min_Fin` (les deux en minutes) doit être assuré
-— idéalement dans `bornerConfig()` côté firmware. Sans cet invariant, la
-transition `PROLONGATION → FIN_TEMPORISATION` (§5.3), qui ne re-teste pas
-`Temps_Min_Fin` car elle le suppose déjà écoulé, pourrait théoriquement
-laisser passer une fin de cycle légèrement avant `Temps_Min_Fin` réel. Cas
-limite improbable (mauvaise configuration opérateur), signalé plutôt que
-silencieusement ignoré.
+## 6. Correspondance firmware → Stateflow
 
-## 8. Interface avec les sous-systèmes existants
+| Firmware | Stateflow |
+|---|---|
+| `lireEntrees()` (valeurs fixes, `T_cap`, `H_fin`) + `majRegime()` | `entry, during` de `FONCTIONNEMENT_NORMAL` |
+| `demarrerCycle()` | `entry` de `EN_CYCLE` + transitions de `ATTENTE_DEMARRAGE` |
+| `etapeRegulation(false)` pendant demande / prolongation | régions parallèles `SOURCE` ‖ `PHASE` |
+| `arbitrageSource()` | transitions entre `MODE_SOLAIRE` / `MODE_H2` / `MODE_GPL` |
+| `etapeSolaire()` (post-purge) | actions de `MODE_SOLAIRE` |
+| `gererCombustion()` | `PURGE` / `ALLUMAGE` / `REGULATION` et leurs transitions |
+| `majPalier()`, `Periode_Regul`, palier imposé | `during` de `REGULATION` |
+| `palierInitial()` + `armerPurgeMiseEnRoute()` | bloc palier_initial (entry `EN_CYCLE`, transitions solaire → combustion) |
+| `entrerErreurCombustion()` + `case ETAT_ERREUR_COMBUSTION` | `ERREUR_COMBUSTION` |
+| `case ETAT_DEMANDE_PROLONGATION`, `case ETAT_PROLONGATION`, transition prioritaire 4 | région `PHASE` |
+| transitions prioritaires 1a / 1b | SSID 118 + transition `duration(...)` |
+| transitions prioritaires 2 / 3 | bord de `EN_CYCLE` → `SECHAGE_TERMINE` |
+| `declencherUrgence(URG_PERTE_FLAMME)` | `REGULATION` → `URGENCE_ATEX` |
+| `case ETAT_URGENCE_ATEX` (réarmement) | `URGENCE_ATEX` → `ATTENTE_DEMARRAGE` |
 
-- `CONVERSION_PUISSANCE` reçoit `V_Fl_1`/`V_Fl_2`/`V_Fl_3` (sorties du chart)
-  et produit la puissance `u` injectée dans `MODELE_THERMIQUE` — aucune
-  modification nécessaire pour le brancher au chart complété.
-- `MODELE_THERMIQUE` produit `T_sec`, qui reboucle en entrée du chart —
-  déjà câblé dans le `.slx` fourni.
+**Différences assumées** (sans effet sur les sorties dans l'usage normal) :
+UP/DOWN pendant le cycle modifient `T_cible` dans le firmware ; dans Simulink,
+`T_cible` est une entrée (bloc Constant), et le chart recalcule simplement les
+seuils à chaque pas. Le menu de paramètres (`CONFIG_MENU`) n'est pas modélisé :
+les paramètres sont les données `Local` du §2.3.
+
+---
+
+## 7. Mode d'emploi
+
+1. Ouvrir **`matlab/Commande_Sechoir_Hybride_corrige.slx`** (chart d'origine +
+   corrections physiques Pnom/Kth/tauth). Ne pas partir d'un modèle déjà
+   modifié par une version précédente du script.
+2. Dans la fenêtre de commande MATLAB, se placer dans le dossier `matlab/`,
+   puis :
+   `completer_fsm_sechoir('Commande_Sechoir_Hybride_corrige')`
+3. Lire la sortie : `[HIERARCHIE INCORRECTE]` → repli manuel du §1, puis
+   relancer ; sinon, clic droit sur le chart → *Update Chart*.
+4. Câbler les **2 nouvelles entrées** `Btn_Stop` et `Btn_Rearm` (blocs
+   Constant à 0 pour une première simulation), et régler `Tps_Prolongation`
+   **en secondes** (1800).
+5. Lancer la simulation et ouvrir le *Diagnostic Viewer* : me renvoyer tout
+   message d'erreur tel quel.
+
+---
+
+## 8. Vérifications effectuées — et ce qui ne l'a pas été
+
+Effectué, sans MATLAB :
+- le script a été analysé par **MISS_HIT** (analyseur statique MATLAB) :
+  syntaxe correcte ;
+- les **37 libellés** générés (9 états, 28 transitions) ont été reconstruits et
+  analysés comme du code MATLAB : syntaxe correcte (une erreur `end end` a été
+  trouvée et corrigée ainsi) ;
+- chaque variable utilisée dans les libellés est déclarée (données d'origine
+  ou ajoutées par le script), aucune donnée ajoutée n'est inutilisée, et
+  aucune **entrée** n'est écrite ;
+- la hiérarchie, les noms de données et le langage d'action ont été relevés
+  directement dans le `.slx` d'origine (`chart_122.xml`).
+
+**Non vérifié** (aucun MATLAB disponible) : l'exécution du script ; les API
+`Decomposition`, changement de parent, `ExecutionOrder`, tracé des
+transitions ; les opérateurs `temporalCount` et `duration` ; la simulation
+elle-même. Le script signale chaque échec d'API au lieu de s'arrêter.
+
+---
+
+## 9. Interface avec les sous-systèmes existants
+
+- `CONVERSION_PUISSANCE` reçoit `V_Fl_1..3` et produit la puissance injectée
+  dans `MODELE_THERMIQUE` (inchangé).
+- `MODELE_THERMIQUE` produit `T_sec`, rebouclé en entrée du chart (inchangé).

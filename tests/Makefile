@@ -16,7 +16,15 @@ test_sechoir: $(SOURCES) $(HEADERS)
 run: test_sechoir
 	./test_sechoir
 
-clean:
-	rm -f test_sechoir
+# Cycle complet : firmware reel + modele thermique illustratif -> cycle.csv
+simulation_cycle: simulation_cycle.cpp mocks/Arduino.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) -o $@ simulation_cycle.cpp mocks/Arduino.cpp
 
-.PHONY: all run clean
+simulation: simulation_cycle
+	./simulation_cycle > cycle.csv
+	@echo "cycle.csv ecrit (t_min, T_sec, palier_pct, etat, H_sec, H_fin)"
+
+clean:
+	rm -f test_sechoir simulation_cycle cycle.csv
+
+.PHONY: all run clean simulation

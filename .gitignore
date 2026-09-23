@@ -1,2 +1,4 @@
 node_modules
 tests/test_sechoir
+tests/simulation_cycle
+tests/cycle.csv

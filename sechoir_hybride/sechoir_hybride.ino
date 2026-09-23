@@ -16,6 +16,27 @@
  *      menu de reprise (REESSAYER / MANUEL / AUTOMATIQUE) ;
  *    - un écran 20x4 I2C (remplace le 16x2 — même bus, même bibliothèque).
  *
+ *  VERSION 3 — décisions opérateur (revue de la logique complète) :
+ *    - fin de cycle : H_sec <= H_fin (prioritaire) OU Duree_Max_Cycle
+ *      -> DEMANDE_PROLONGATION (l'opérateur choisit N min, ou STOP ; sans
+ *      réponse pendant Temps_Reponse -> SECHAGE_TERMINE). T_cible atteinte
+ *      n'est PLUS un critère de fin (c'est seulement le palier 0 %).
+ *      FIN_TEMPORISATION, la prolongation automatique et son plafond sont
+ *      supprimés ;
+ *    - T_cap n'est plus lue sur la plaque (contaminée par le brûleur
+ *      intégré au capteur) : T_cap = T_amb + DeltaT_Sol (paramétrable).
+ *      Seuils solaires : ON = T_cible + Marge_Sol, OFF = ON - Hyst_Sol ;
+ *    - repère thermique FROID / CHAUD (T_sec par rapport à Seuil_Chaud) : choisit le
+ *      seuil solaire applicable et le palier d'allumage ;
+ *    - retour au solaire = extinction normale + post-purge ;
+ *    - perte de flamme en régulation : 1 relance, puis URGENCE ; flamme vue
+ *      alors que le gaz est fermé -> URGENCE ;
+ *    - échec d'allumage après bascule : même règle de 3 essais que partout ;
+ *    - grandeurs T_amb / H_amb / H_sec / Press_H2 en AUTO (mesurée) ou FIXE
+ *      (saisie) ; T_sec jamais fixe -> « palier imposé » à la place ;
+ *    - période de régulation Periode_Regul paramétrable, T_cible modifiable
+ *      en cours de cycle (UP/DOWN) avec recalcul immédiat des seuils.
+ *
  *  Ce fichier suit la structure imposée par le cahier des charges (§10 v1,
  *  §18 v2) :
  *    1. Includes                      7.  setup()
@@ -113,15 +134,21 @@ const float    DEFAUT_H_PRODUIT_CIBLE    = 10.0f;   // %
 const bool     DEFAUT_MODE_AUTO          = true;
 const uint8_t  DEFAUT_CHOIX_MODE         = 2;        // 1=Solaire,2=H2,3=GPL
 const uint32_t DEFAUT_DUREE_MAX_CYCLE    = 600UL;    // min
-const uint32_t DEFAUT_TEMPS_PROLONGATION = 180UL;    // min — plafond forcé (voir AVIS n°2)
+const uint32_t DEFAUT_PROLONG_DEFAUT     = 30UL;     // min — durée proposée à chaque demande
 const float    DEFAUT_HHYST              = 5.0f;     // °C
 const uint32_t DEFAUT_TEMPS_MIN_FIN      = 120UL;    // min (2 h, §5)
-const uint32_t DEFAUT_TEMPS_ARRET_AUTO   = 300UL;    // s (5 min, §6)
+const uint32_t DEFAUT_TEMPS_REPONSE      = 300UL;    // s (5 min) — sans réponse -> TERMINE
 const uint32_t DEFAUT_TEMPS_PURGE        = 120UL;    // s (§8)
 const uint32_t DEFAUT_TEMPS_ALLUMAGE     = 4UL;      // s
 const float    DEFAUT_PRESS_H2_MIN       = 2.0f;     // bar
 const int      DEFAUT_SEUIL_MQ8          = 350;
 const int      DEFAUT_SEUIL_MQ6          = 350;
+const uint32_t DEFAUT_PERIODE_REGUL      = 1UL;      // s — comparaison T_sec / seuils
+const float    DEFAUT_DELTA_T_SOL        = 20.0f;    // °C — T_cap = T_amb + DeltaT_Sol (À CALIBRER)
+const float    DEFAUT_MARGE_SOL          = 0.0f;     // °C — ON = T_cible + Marge_Sol
+const float    DEFAUT_HYST_SOL           = 5.0f;     // °C — OFF = ON - Hyst_Sol
+const uint8_t  DEFAUT_PALIER_IMPOSE      = 1;        // 67 % (0=100 %, 1=67 %, 2=33 %)
+const float    DEFAUT_SEUIL_CHAUD        = 40.0f;    // °C — repère FROID / CHAUD sur T_sec
 
 /* --- Bornes de saisie (menu) — AVIS n°4 : les temporisations de sécurité
  * (purge, allumage, seuils de fuite) sont rendues modifiables comme demandé,
@@ -132,49 +159,58 @@ const float    T_INIT_MIN  = 0.0f,   T_INIT_MAX  = 60.0f;
 const float    H_INITIAL_MIN = 0.0f, H_INITIAL_MAX = 100.0f;
 const float    H_PRODUIT_MIN = 1.0f, H_PRODUIT_MAX = 50.0f;
 const uint32_t DUREE_MAX_CYCLE_MIN = 15UL,  DUREE_MAX_CYCLE_MAX = 1440UL;   // min
-const uint32_t TEMPS_PROLONGATION_MIN = 15UL, TEMPS_PROLONGATION_MAX = 720UL; // min
+const uint32_t PROLONG_MIN = 5UL,        PROLONG_MAX = 720UL;               // min
 const float    HHYST_MIN = 1.0f,  HHYST_MAX = 15.0f;                        // °C
-const uint32_t TEMPS_MIN_FIN_MIN = 10UL, TEMPS_MIN_FIN_MAX = 1440UL;        // min
-const uint32_t TEMPS_ARRET_AUTO_MIN = 30UL, TEMPS_ARRET_AUTO_MAX = 1800UL;  // s
+const uint32_t TEMPS_MIN_FIN_MIN = 0UL,  TEMPS_MIN_FIN_MAX = 1440UL;        // min (0 = verrou désactivé)
+const uint32_t TEMPS_REPONSE_MIN = 30UL, TEMPS_REPONSE_MAX = 1800UL;        // s
 const uint32_t TEMPS_PURGE_MIN = 60UL,   TEMPS_PURGE_MAX = 300UL;           // s — PLANCHER DE SÉCURITÉ
 const uint32_t TEMPS_ALLUMAGE_MIN = 2UL, TEMPS_ALLUMAGE_MAX = 10UL;         // s
 const float    PRESS_H2_MIN_PLANCHER = 0.5f, PRESS_H2_MIN_PLAFOND = 8.0f;   // bar
 const int      SEUIL_MQ_MIN = 100, SEUIL_MQ_MAX = 900;                     // sur 1023
+const uint32_t PERIODE_REGUL_MIN = 1UL,  PERIODE_REGUL_MAX = 60UL;          // s (DS18B20 : 750 ms)
+const float    DELTA_T_SOL_MIN = 0.0f,   DELTA_T_SOL_MAX = 60.0f;           // °C
+const float    MARGE_SOL_MIN = 0.0f,     MARGE_SOL_MAX = 20.0f;             // °C
+const float    HYST_SOL_MIN = 1.0f,      HYST_SOL_MAX = 20.0f;              // °C
+const float    SEUIL_CHAUD_MIN = 20.0f,  SEUIL_CHAUD_MAX = 80.0f;           // °C
+const float    T_AMB_FIXE_MIN = -10.0f,  T_AMB_FIXE_MAX = 55.0f;            // °C
+const float    HUM_FIXE_MIN = 0.0f,      HUM_FIXE_MAX = 100.0f;             // %
+const float    PRESS_FIXE_MIN = 0.0f,    PRESS_FIXE_MAX = 10.0f;            // bar
 
 /* --- Pas de réglage du menu --- */
 const float    PAS_TEMPERATURE       = 1.0f;    // °C
 const float    PAS_HUMIDITE          = 1.0f;    // %
 const uint32_t PAS_DUREE_MIN         = 15UL;    // minutes
+const uint32_t PAS_PROLONG           = 5UL;     // minutes (durée de prolongation)
 const float    PAS_HHYST             = 0.5f;    // °C
 const uint32_t PAS_TEMPS_SEC         = 10UL;    // secondes (purge)
 const uint32_t PAS_TEMPS_ALLUMAGE    = 1UL;     // secondes
-const uint32_t PAS_TEMPS_ARRET_AUTO  = 30UL;    // secondes
+const uint32_t PAS_TEMPS_REPONSE     = 30UL;    // secondes
+const uint32_t PAS_PERIODE_REGUL     = 1UL;     // secondes
 const float    PAS_PRESSION          = 0.5f;    // bar
 const int      PAS_SEUIL_MQ          = 10;
 
 /* --- Écart minimal exploitable pour T_init/T_cible (garde-fou calcul seuils) --- */
 const float    ECART_MIN_SEUILS      = 3.0f;    // °C
 
-/* --- Nombre d'échecs d'allumage consécutifs avant escalade opérateur.
- * AJOUT (AVIS n°3) : le cahier des charges ne demande l'écran d'erreur avec
- * menu MANUEL/AUTOMATIQUE/RÉESSAYER que pour un échec de BASCULEMENT (§13).
- * Pour ne pas boucler indéfiniment purge->allumage->échec sur un simple
- * défaut d'allumeur (gaspillage de gaz, usure du Spark), la même escalade
- * est déclenchée après ce nombre d'échecs consécutifs, quelle qu'en soit
- * la cause. Un basculement raté déclenche l'escalade dès le 1er échec. */
+/* --- Nombre d'échecs d'allumage consécutifs avant escalade opérateur
+ * (ERREUR_COMBUSTION). V3 : la même règle s'applique aussi après une bascule
+ * H2<->GPL (décision opérateur) — plus d'escalade dès le 1er échec. Chaque
+ * échec est suivi d'une purge complète avant le nouvel essai. */
 const uint16_t MAX_ECHECS_AVANT_ALARME = 3;
+
+/* --- Pertes de flamme en régulation tolérées par cycle avant URGENCE (V3) :
+ * la 1re est suivie d'une relance (purge + allumage), la suivante verrouille. */
+const uint8_t  MAX_PERTES_FLAMME = 1;
+
+/* --- Flamme détectée alors que le gaz est commandé FERMÉ (vanne qui fuit ou
+ * capteur défaillant) : URGENCE si cela dure plus que ce délai. Le délai
+ * couvre l'extinction physique normale de la flamme après fermeture du gaz.
+ * Constante de sécurité, volontairement non réglable au menu. */
+const uint32_t DELAI_FLAMME_PARASITE_MS = 5000UL;
 
 /* --- Marge anti-court-cycle pour le retour automatique GPL -> H2 (AJOUT,
  * voir AVIS n°5) : évite un aller-retour de source pile au seuil. --- */
 const float    MARGE_RETOUR_H2 = 0.5f;   // bar, ajoutée à Press_H2_Min
-
-/* --- Confirmation avant de considérer le palier 0 % comme « durable »
- * (critère secondaire de fin de cycle, §6). AVIS n°6 dans le doc. --- */
-const uint32_t CONFIRMATION_PALIER_0_MS = 60000UL;   // 60 s
-
-/* --- Disponibilité de la source solaire (priorité 1) --- */
-const float    SEUIL_T_CAP_SOLAIRE_ON  = 55.0f;   // Plaque capteur assez chaude -> solaire
-const float    SEUIL_T_CAP_SOLAIRE_OFF = 45.0f;   // Plaque refroidie -> passage en combustion
 
 /* --- Garde-fous numériques --- */
 const float    H_FIN_MAX           = 95.0f;       // H_fin ne peut jamais dépasser cette valeur
@@ -217,24 +253,29 @@ const uint8_t PWM_EXTRACT_PAR_PALIER[3] = {200, 165, 130};
  *    Pour AJOUTER un état : ajouter une valeur ici, un `case` dans pasFSM()
  *    et un libellé dans nomEtat(). Rien d'autre à modifier.
  *
- *    Hiérarchie conceptuelle (§1 v2) :
- *      FONCTIONNEMENT_NORMAL
- *        ATTENTE_DEMARRAGE, CONFIG_MENU, MODE_SOLAIRE, MODE_H2, MODE_GPL,
- *        PROLONGATION, FIN_TEMPORISATION, SECHAGE_TERMINE,
- *        ERREUR_COMBUSTION
- *      URGENCE_ATEX          <- parallèle, prioritaire, hors hiérarchie
+ *    Hiérarchie conceptuelle (V3) :
+ *      ATTENTE_DEMARRAGE, CONFIG_MENU
+ *      CYCLE = (SOURCE) x (PHASE), exécutées en parallèle :
+ *        SOURCE : MODE_SOLAIRE / MODE_H2 / MODE_GPL / ERREUR_COMBUSTION
+ *        PHASE  : NORMAL (= MODE_*) / DEMANDE_PROLONGATION / PROLONGATION
+ *      SECHAGE_TERMINE
+ *      URGENCE_ATEX          <- prioritaire, accessible depuis tout état
+ *    Dans le firmware, etat_courant porte l'état AFFICHÉ ; la source reste
+ *    portée par Source_Active et la combustion par phase_combustion, qui
+ *    continuent de tourner pendant DEMANDE_PROLONGATION / PROLONGATION
+ *    (etapeRegulation(false)).
  * ------------------------------------------------------------------------*/
 enum EtatFSM : uint8_t {
   ETAT_ATTENTE_DEMARRAGE = 0,  // État initial : tout fermé, ventilateurs à l'arrêt
   ETAT_CONFIG_MENU,            // Saisie des paramètres (LCD + 4 boutons)
   ETAT_MODE_SOLAIRE,           // Passif : AUCUNE électrovanne, ventilateurs seuls
   ETAT_MODE_H2,                // Combustion hydrogène (priorité 2)
-  ETAT_MODE_GPL,                // Combustion GPL, secours (priorité 3)
-  ETAT_PROLONGATION,           // Duree_Max_Cycle dépassée sans atteindre H_fin
-  ETAT_FIN_TEMPORISATION,      // Consigne atteinte : confirmation d'arrêt (§6)
-  ETAT_SECHAGE_TERMINE,        // Cycle terminé (normal ou forcé)
-  ETAT_ERREUR_COMBUSTION,      // Échec de basculement ou échecs d'allumage répétés (§13)
-  ETAT_URGENCE_ATEX,           // État PARALLÈLE et PRIORITAIRE (§15)
+  ETAT_MODE_GPL,               // Combustion GPL, secours (priorité 3)
+  ETAT_DEMANDE_PROLONGATION,   // Fin atteinte (humidité ou durée max) : « Prolonger ? »
+  ETAT_PROLONGATION,           // Prolongation de N min choisie par l'opérateur
+  ETAT_SECHAGE_TERMINE,        // Cycle terminé
+  ETAT_ERREUR_COMBUSTION,      // Échecs d'allumage répétés (§13)
+  ETAT_URGENCE_ATEX,           // État PRIORITAIRE (§15) : fuite, AU ou défaut flamme
   NB_ETATS
 };
 
@@ -273,10 +314,21 @@ enum RaisonPurge : uint8_t {
   PURGE_PALIER_0        // Coupure volontaire (consigne atteinte) : réévaluée en fin de purge
 };
 
-/* Raison d'entrée en ETAT_ERREUR_COMBUSTION (§13) */
-enum RaisonErreurCombustion : uint8_t {
-  ERR_BASCULEMENT = 0,      // Le basculement de source a échoué
-  ERR_ALLUMAGE_REPETE       // Échecs d'allumage répétés (hors basculement)
+/* Cause d'entrée en ETAT_URGENCE_ATEX (affichée, et détermine le réarmement) */
+enum CauseUrgence : uint8_t {
+  URG_AUCUNE = 0,
+  URG_FUITE_H2,         // MQ8 > Seuil_MQ8
+  URG_FUITE_GPL,        // MQ6 > Seuil_MQ6
+  URG_ARRET_URGENCE,    // Bouton d'arrêt d'urgence (ou fil coupé)
+  URG_PERTE_FLAMME,     // Extinction en régulation après la relance autorisée
+  URG_FLAMME_PARASITE   // Flamme vue alors que le gaz est commandé fermé
+};
+
+/* Motif affiché en DEMANDE_PROLONGATION */
+enum MotifDemande : uint8_t {
+  MOTIF_HUMIDITE = 0,       // H_sec <= H_fin (prioritaire)
+  MOTIF_DUREE_MAX,          // Duree_Max_Cycle atteinte sans l'humidité
+  MOTIF_FIN_PROLONGATION    // Les N min choisies sont écoulées
 };
 
 /* Choix de l'opérateur en ETAT_ERREUR_COMBUSTION (§13) */
@@ -301,15 +353,30 @@ enum ChampMenu : uint8_t {
   MENU_H_INITIAL,
   MENU_H_PRODUIT,
   MENU_DUREE_MAX,
-  MENU_TEMPS_PROLONGATION,
+  MENU_PROLONG_DEFAUT,
+  MENU_TEMPS_REPONSE,
+  MENU_TEMPS_MIN_FIN,
   MENU_HHYST,
+  MENU_PERIODE_REGUL,
+  MENU_REGUL_AUTO,     // Régulation AUTO (par T_sec) ou palier IMPOSÉ
+  MENU_PALIER_IMPOSE,
+  MENU_DELTA_T_SOL,
+  MENU_MARGE_SOL,
+  MENU_HYST_SOL,
+  MENU_SEUIL_CHAUD,    // Repère FROID / CHAUD
   MENU_TEMPS_PURGE,
   MENU_TEMPS_ALLUMAGE,
-  MENU_TEMPS_MIN_FIN,
-  MENU_TEMPS_ARRET_AUTO,
   MENU_PRESS_H2_MIN,
   MENU_SEUIL_MQ8,
   MENU_SEUIL_MQ6,
+  MENU_T_AMB_MODE,     // AUTO (capteur) / FIXE (valeur saisie)
+  MENU_T_AMB_VAL,
+  MENU_H_AMB_MODE,
+  MENU_H_AMB_VAL,
+  MENU_H_SEC_MODE,
+  MENU_H_SEC_VAL,
+  MENU_PRESS_MODE,
+  MENU_PRESS_VAL,
   MENU_REARMEMENT,     // Chemin 2 de réarmement ATEX (§15)
   NB_CHAMPS_MENU
 };
@@ -328,7 +395,8 @@ float    T_sec    = 20.0f;   // °C — chambre de séchage : GRANDEUR RÉGULÉE
 float    H_sec    = 90.0f;   // %  — air extrait de la chambre : critère de fin de cycle
 float    T_amb    = 20.0f;   // °C — air extérieur
 float    H_amb    = 50.0f;   // %  — air extérieur : entre dans H_fin
-float    T_cap    = 20.0f;   // °C — plaque capteur solaire / brûleur
+float    T_cap    = 20.0f;   // °C — ESTIMATION solaire = T_amb + DeltaT_Sol (seule utilisée par la logique)
+float    T_cap_mesure = 20.0f; // °C — sonde plaque (contaminée par le brûleur intégré) : affichage seul
 bool     Flame    = false;   // Confirmation de flamme
 int      MQ8_H2   = 0;       // Niveau de détection H2
 int      MQ6_But  = 0;       // Niveau de détection GPL
@@ -354,13 +422,21 @@ struct Configuration {
   float    H_produit_cible;     // % — humidité résiduelle visée du produit
   bool     Mode_Auto;           // true = automatique, false = manuel
   uint8_t  Choix_Mode;          // 1 = Solaire, 2 = H2, 3 = GPL (mode manuel)
-  uint32_t Duree_Max_Cycle;     // min — avant passage en PROLONGATION
-  uint32_t Temps_Prolongation;  // min — plafond forcé de la prolongation (AVIS n°2)
+  uint32_t Duree_Max_Cycle;     // min — critère de fin n°2 -> DEMANDE_PROLONGATION
+  uint32_t Prolong_Defaut;      // min — durée de prolongation proposée à chaque demande
+  uint32_t Temps_Reponse;       // s — sans réponse en DEMANDE_PROLONGATION -> TERMINE
 
   float    Hhyst;               // °C — bande d'hystérésis totale des paliers
+  uint32_t Periode_Regul;       // s — période de comparaison T_sec / seuils (Te)
+  bool     Regul_Auto;          // true = palier par T_sec ; false = palier imposé
+  uint8_t  Palier_Impose;       // 0=100 %, 1=67 %, 2=33 % (si Regul_Auto == false)
 
   uint32_t Temps_Min_Fin;       // min — durée minimale avant d'autoriser H_sec<=H_fin
-  uint32_t Temps_Arret_Auto;    // s — délai de confirmation en FIN_TEMPORISATION
+
+  float    DeltaT_Sol;          // °C — T_cap = T_amb + DeltaT_Sol
+  float    Marge_Sol;           // °C — seuil solaire ON = T_cible + Marge_Sol
+  float    Hyst_Sol;            // °C — seuil solaire OFF = ON - Hyst_Sol
+  float    Seuil_Chaud;         // °C — repère thermique : CHAUD si T_sec >= Seuil_Chaud
 
   uint32_t Temps_Purge;         // s — durée de purge obligatoire
   uint32_t Temps_Allumage;      // s — délai max de confirmation de flamme
@@ -368,9 +444,17 @@ struct Configuration {
 
   int      Seuil_MQ8;           // Seuil de détection de fuite H2
   int      Seuil_MQ6;           // Seuil de détection de fuite GPL
+
+  /* Grandeurs AUTO (mesurées) ou FIXES (saisies) — fonctionnement dégradé si
+   * un capteur est en panne. T_sec, MQ8, MQ6, flamme et AU n'ont JAMAIS de
+   * mode fixe (régulation et sécurité). */
+  bool     Fixe_T_amb;   float Val_T_amb;
+  bool     Fixe_H_amb;   float Val_H_amb;
+  bool     Fixe_H_sec;   float Val_H_sec;
+  bool     Fixe_Press;   float Val_Press;
 };
 
-const uint16_t CONFIG_SENTINELLE = 0xC0DE;  // Change si la struct change de forme -> réinit
+const uint16_t CONFIG_SENTINELLE = 0xC0E0;  // V3 : la struct a changé de forme -> réinit
 const int      EEPROM_ADR_CONFIG = 0;
 
 Configuration Config;
@@ -390,14 +474,32 @@ static void bornerConfig() {
   if (Config.Choix_Mode < 1 || Config.Choix_Mode > 3) Config.Choix_Mode = DEFAUT_CHOIX_MODE;
   if (Config.Duree_Max_Cycle < DUREE_MAX_CYCLE_MIN) Config.Duree_Max_Cycle = DUREE_MAX_CYCLE_MIN;
   if (Config.Duree_Max_Cycle > DUREE_MAX_CYCLE_MAX) Config.Duree_Max_Cycle = DUREE_MAX_CYCLE_MAX;
-  if (Config.Temps_Prolongation < TEMPS_PROLONGATION_MIN) Config.Temps_Prolongation = TEMPS_PROLONGATION_MIN;
-  if (Config.Temps_Prolongation > TEMPS_PROLONGATION_MAX) Config.Temps_Prolongation = TEMPS_PROLONGATION_MAX;
+  if (Config.Prolong_Defaut < PROLONG_MIN) Config.Prolong_Defaut = PROLONG_MIN;
+  if (Config.Prolong_Defaut > PROLONG_MAX) Config.Prolong_Defaut = PROLONG_MAX;
+  if (Config.Temps_Reponse < TEMPS_REPONSE_MIN) Config.Temps_Reponse = TEMPS_REPONSE_MIN;
+  if (Config.Temps_Reponse > TEMPS_REPONSE_MAX) Config.Temps_Reponse = TEMPS_REPONSE_MAX;
   if (Config.Hhyst < HHYST_MIN) Config.Hhyst = HHYST_MIN;
   if (Config.Hhyst > HHYST_MAX) Config.Hhyst = HHYST_MAX;
-  if (Config.Temps_Min_Fin < TEMPS_MIN_FIN_MIN) Config.Temps_Min_Fin = TEMPS_MIN_FIN_MIN;
+  if (Config.Periode_Regul < PERIODE_REGUL_MIN) Config.Periode_Regul = PERIODE_REGUL_MIN;
+  if (Config.Periode_Regul > PERIODE_REGUL_MAX) Config.Periode_Regul = PERIODE_REGUL_MAX;
+  if (Config.Palier_Impose > PALIER_33) Config.Palier_Impose = DEFAUT_PALIER_IMPOSE;
   if (Config.Temps_Min_Fin > TEMPS_MIN_FIN_MAX) Config.Temps_Min_Fin = TEMPS_MIN_FIN_MAX;
-  if (Config.Temps_Arret_Auto < TEMPS_ARRET_AUTO_MIN) Config.Temps_Arret_Auto = TEMPS_ARRET_AUTO_MIN;
-  if (Config.Temps_Arret_Auto > TEMPS_ARRET_AUTO_MAX) Config.Temps_Arret_Auto = TEMPS_ARRET_AUTO_MAX;
+  if (Config.DeltaT_Sol < DELTA_T_SOL_MIN) Config.DeltaT_Sol = DELTA_T_SOL_MIN;
+  if (Config.DeltaT_Sol > DELTA_T_SOL_MAX) Config.DeltaT_Sol = DELTA_T_SOL_MAX;
+  if (Config.Marge_Sol < MARGE_SOL_MIN) Config.Marge_Sol = MARGE_SOL_MIN;
+  if (Config.Marge_Sol > MARGE_SOL_MAX) Config.Marge_Sol = MARGE_SOL_MAX;
+  if (Config.Hyst_Sol < HYST_SOL_MIN) Config.Hyst_Sol = HYST_SOL_MIN;
+  if (Config.Hyst_Sol > HYST_SOL_MAX) Config.Hyst_Sol = HYST_SOL_MAX;
+  if (Config.Seuil_Chaud < SEUIL_CHAUD_MIN) Config.Seuil_Chaud = SEUIL_CHAUD_MIN;
+  if (Config.Seuil_Chaud > SEUIL_CHAUD_MAX) Config.Seuil_Chaud = SEUIL_CHAUD_MAX;
+  if (Config.Val_T_amb < T_AMB_FIXE_MIN) Config.Val_T_amb = T_AMB_FIXE_MIN;
+  if (Config.Val_T_amb > T_AMB_FIXE_MAX) Config.Val_T_amb = T_AMB_FIXE_MAX;
+  if (Config.Val_H_amb < HUM_FIXE_MIN) Config.Val_H_amb = HUM_FIXE_MIN;
+  if (Config.Val_H_amb > HUM_FIXE_MAX) Config.Val_H_amb = HUM_FIXE_MAX;
+  if (Config.Val_H_sec < HUM_FIXE_MIN) Config.Val_H_sec = HUM_FIXE_MIN;
+  if (Config.Val_H_sec > HUM_FIXE_MAX) Config.Val_H_sec = HUM_FIXE_MAX;
+  if (Config.Val_Press < PRESS_FIXE_MIN) Config.Val_Press = PRESS_FIXE_MIN;
+  if (Config.Val_Press > PRESS_FIXE_MAX) Config.Val_Press = PRESS_FIXE_MAX;
   if (Config.Temps_Purge < TEMPS_PURGE_MIN) Config.Temps_Purge = TEMPS_PURGE_MIN;      // plancher de sécurité
   if (Config.Temps_Purge > TEMPS_PURGE_MAX) Config.Temps_Purge = TEMPS_PURGE_MAX;
   if (Config.Temps_Allumage < TEMPS_ALLUMAGE_MIN) Config.Temps_Allumage = TEMPS_ALLUMAGE_MIN;
@@ -419,15 +521,26 @@ static void chargerDefautsConfig() {
   Config.Mode_Auto          = DEFAUT_MODE_AUTO;
   Config.Choix_Mode         = DEFAUT_CHOIX_MODE;
   Config.Duree_Max_Cycle    = DEFAUT_DUREE_MAX_CYCLE;
-  Config.Temps_Prolongation = DEFAUT_TEMPS_PROLONGATION;
+  Config.Prolong_Defaut     = DEFAUT_PROLONG_DEFAUT;
+  Config.Temps_Reponse      = DEFAUT_TEMPS_REPONSE;
   Config.Hhyst              = DEFAUT_HHYST;
+  Config.Periode_Regul      = DEFAUT_PERIODE_REGUL;
+  Config.Regul_Auto         = true;
+  Config.Palier_Impose      = DEFAUT_PALIER_IMPOSE;
   Config.Temps_Min_Fin      = DEFAUT_TEMPS_MIN_FIN;
-  Config.Temps_Arret_Auto   = DEFAUT_TEMPS_ARRET_AUTO;
+  Config.DeltaT_Sol         = DEFAUT_DELTA_T_SOL;
+  Config.Marge_Sol          = DEFAUT_MARGE_SOL;
+  Config.Hyst_Sol           = DEFAUT_HYST_SOL;
+  Config.Seuil_Chaud        = DEFAUT_SEUIL_CHAUD;
   Config.Temps_Purge        = DEFAUT_TEMPS_PURGE;
   Config.Temps_Allumage     = DEFAUT_TEMPS_ALLUMAGE;
   Config.Press_H2_Min       = DEFAUT_PRESS_H2_MIN;
   Config.Seuil_MQ8          = DEFAUT_SEUIL_MQ8;
   Config.Seuil_MQ6          = DEFAUT_SEUIL_MQ6;
+  Config.Fixe_T_amb = false;  Config.Val_T_amb = 25.0f;
+  Config.Fixe_H_amb = false;  Config.Val_H_amb = 40.0f;
+  Config.Fixe_H_sec = false;  Config.Val_H_sec = 60.0f;
+  Config.Fixe_Press = false;  Config.Val_Press = 5.0f;
 }
 
 /* Charge la config EEPROM si elle est valide (sentinelle correcte), sinon
@@ -465,13 +578,21 @@ uint32_t        chrono_purge = 0;                // Horodatage de début de purg
 uint32_t        chrono_allumage = 0;             // Horodatage de début d'allumage
 uint32_t        chrono_cycle = 0;                // Horodatage de début de cycle
 uint32_t        chrono_prolongation = 0;         // Horodatage d'entrée en PROLONGATION
-uint32_t        chrono_arret_auto = 0;           // Horodatage d'entrée en FIN_TEMPORISATION
-uint32_t        chrono_palier0 = 0;              // Horodatage d'entrée au palier 0 % (confirmation)
+uint32_t        chrono_demande = 0;              // Horodatage de la demande (ou de la dernière action opérateur)
+uint32_t        duree_prolongation_min = DEFAUT_PROLONG_DEFAUT;  // N choisi par l'opérateur
+MotifDemande    motif_demande = MOTIF_HUMIDITE;
+bool            humidite_deja_atteinte = false;  // H_fin déjà atteinte dans ce cycle
+bool            regime_chaud = false;            // Repère thermique : false = FROID, true = CHAUD
 uint8_t         Source_Active = SRC_SOLAIRE;
 uint8_t         Menu_Index = MENU_MODE_AUTO;
-RaisonErreurCombustion raison_erreur_combustion = ERR_ALLUMAGE_REPETE;
 uint8_t         Choix_Erreur = CHOIX_ERR_REESSAYER;
-bool            arret_force_duree = false;       // Affichage : Temps_Prolongation dépassé (§6bis)
+CauseUrgence    cause_urgence = URG_AUCUNE;
+uint8_t         nb_pertes_flamme = 0;            // Pertes de flamme en régulation dans ce cycle
+uint32_t        chrono_flamme_parasite = 0;
+bool            flamme_parasite_armee = false;   // Flamme vue gaz fermé : chrono en cours
+bool            post_purge_active = false;       // Post-purge après retour au solaire
+uint32_t        chrono_post_purge = 0;
+uint32_t        t_derniere_regul = 0;            // Dernière comparaison T_sec / seuils (Periode_Regul)
 
 /* --- Variables de service --- */
 static uint32_t t_boucle = 0;                    // millis() figé pour toute l'itération
@@ -523,8 +644,8 @@ static const char* nomEtat(EtatFSM e) {
     case ETAT_MODE_SOLAIRE:        return "SOLAIRE";
     case ETAT_MODE_H2:             return "H2";
     case ETAT_MODE_GPL:            return "GPL";
+    case ETAT_DEMANDE_PROLONGATION: return "DEMANDE";
     case ETAT_PROLONGATION:        return "PROLONG.";
-    case ETAT_FIN_TEMPORISATION:   return "FIN TEMPO";
     case ETAT_SECHAGE_TERMINE:     return "TERMINE";
     case ETAT_ERREUR_COMBUSTION:   return "ERREUR";
     case ETAT_URGENCE_ATEX:        return "URGENCE";
@@ -577,8 +698,9 @@ static void changerEtat(EtatFSM nouvel_etat) {
   if (nouvel_etat == ETAT_PROLONGATION) {
     chrono_prolongation = t_boucle;
   }
-  if (nouvel_etat == ETAT_FIN_TEMPORISATION) {
-    chrono_arret_auto = t_boucle;
+  if (nouvel_etat == ETAT_DEMANDE_PROLONGATION) {
+    chrono_demande = t_boucle;
+    duree_prolongation_min = Config.Prolong_Defaut;
   }
   Serial.print("FSM -> ");
   Serial.println(nomEtat(nouvel_etat));
@@ -682,9 +804,52 @@ static void majPalier() {
   }
 }
 
-/* Cause d'urgence encore présente ? (§15) */
+/* Palier correspondant DIRECTEMENT à T_sec (sans mémoire d'hystérésis) :
+ * utilisé pour l'allumage en régime CHAUD, où repartir à 100 % ferait
+ * dépasser la consigne d'une chambre déjà chaude. */
+static uint8_t palierDepuisTsec() {
+  if (T_sec < T1) return PALIER_100;
+  if (T_sec < T2) return PALIER_67;
+  if (T_sec < T3) return PALIER_33;
+  return PALIER_0;
+}
+
+/* Repère thermique FROID / CHAUD (V3) : la chambre est-elle déjà chaude ?
+ * Référence = Config.Seuil_Chaud (paramètre dédié, et non T1 : en mode auto
+ * T_init = T_sec au démarrage, donc T1 est toujours au-dessus de la chambre
+ * à cet instant et ne pourrait jamais signaler une chambre déjà chaude).
+ * Bande ±Hhyst/2 pour ne pas osciller autour du repère. */
+static void majRegime() {
+  float demi = demiHyst();
+  if (!regime_chaud && T_sec >= Config.Seuil_Chaud + demi) regime_chaud = true;
+  else if (regime_chaud && T_sec < Config.Seuil_Chaud - demi) regime_chaud = false;
+}
+
+/* Seuils solaires (V3), exprimés sur l'estimation T_cap = T_amb + DeltaT_Sol. */
+static inline float seuilSolaireOn()  { return Config.T_cible + Config.Marge_Sol; }
+static inline float seuilSolaireOff() { return seuilSolaireOn() - Config.Hyst_Sol; }
+
+/* Seuil pour CHOISIR (au démarrage) ou GARDER (en cycle) le solaire :
+ *   FROID -> ON  : la chambre est froide, il faut un soleil franc ;
+ *   CHAUD -> OFF : l'inertie de la chambre tolère un soleil plus faible.
+ * Quitter la combustion pour le solaire exige TOUJOURS ON (arbitrageSource). */
+static inline float seuilMaintienSolaire() {
+  return regime_chaud ? seuilSolaireOff() : seuilSolaireOn();
+}
+
+/* Fuite de gaz ou arrêt d'urgence : causes « présentes tant que la mesure
+ * l'indique » (réévaluées à chaque itération). */
+static CauseUrgence causeGazOuAU() {
+  if (AU_Urgence)                  return URG_ARRET_URGENCE;
+  if (MQ8_H2 > Config.Seuil_MQ8)   return URG_FUITE_H2;
+  if (MQ6_But > Config.Seuil_MQ6)  return URG_FUITE_GPL;
+  return URG_AUCUNE;
+}
+
+/* Le réarmement n'est accepté que si AUCUNE cause n'est encore présente :
+ * ni fuite, ni AU, ni flamme (la flamme doit être éteinte gaz fermé). */
 static bool causeUrgencePresente() {
-  return (MQ8_H2 > Config.Seuil_MQ8) || (MQ6_But > Config.Seuil_MQ6) || AU_Urgence;
+  return causeGazOuAU() != URG_AUCUNE || Flame;
 }
 
 /* États dans lesquels un cycle de séchage est effectivement en cours (pour
@@ -692,18 +857,49 @@ static bool causeUrgencePresente() {
 static bool cycleEnCours() {
   return etat_courant == ETAT_MODE_SOLAIRE || etat_courant == ETAT_MODE_H2 ||
          etat_courant == ETAT_MODE_GPL     || etat_courant == ETAT_PROLONGATION ||
-         etat_courant == ETAT_FIN_TEMPORISATION;
+         etat_courant == ETAT_DEMANDE_PROLONGATION;
+}
+
+static bool etatNormal() {
+  return etat_courant == ETAT_MODE_SOLAIRE || etat_courant == ETAT_MODE_H2 ||
+         etat_courant == ETAT_MODE_GPL;
+}
+
+/* Critère de fin n°1 (prioritaire) : humidité atteinte, verrouillée par
+ * Temps_Min_Fin (évite une fin prématurée : au début de la chauffe,
+ * l'humidité relative de l'air chute alors que le produit est encore humide).
+ * T_sec >= T_cible n'est PAS un critère de fin (V3). */
+static bool conditionHumidite() {
+  bool duree_min_ecoulee = (t_boucle - chrono_cycle) >= (Config.Temps_Min_Fin * 60000UL);
+  return duree_min_ecoulee && (H_sec <= H_fin);
+}
+
+static void entrerDemande(MotifDemande motif) {
+  motif_demande = motif;
+  if (motif == MOTIF_HUMIDITE) humidite_deja_atteinte = true;
+  changerEtat(ETAT_DEMANDE_PROLONGATION);
 }
 
 /* Entrée dans l'état d'erreur de combustion (§13) : arrêt sûr + alarme +
- * menu de reprise. Ni le basculement raté ni les échecs répétés ne doivent
- * continuer à boucler tout seuls indéfiniment. */
-static void entrerErreurCombustion(RaisonErreurCombustion raison) {
+ * menu de reprise. Les échecs répétés ne doivent jamais boucler tout seuls. */
+static void entrerErreurCombustion() {
   fermerGaz();
-  raison_erreur_combustion = raison;
   Choix_Erreur = CHOIX_ERR_REESSAYER;
   Buzzer = true;
   changerEtat(ETAT_ERREUR_COMBUSTION);
+}
+
+static void appliquerUrgence();
+
+/* Passage en URGENCE_ATEX avec mémorisation de la cause (affichage). */
+static void declencherUrgence(CauseUrgence cause) {
+  if (etat_courant != ETAT_URGENCE_ATEX) {
+    cause_urgence = cause;
+    Serial.print("URGENCE : cause ");
+    Serial.println((int)cause);
+    changerEtat(ETAT_URGENCE_ATEX);
+  }
+  appliquerUrgence();
 }
 
 /* --------------------------------------------------------------------------
@@ -823,7 +1019,7 @@ static void lireCapteursLents() {
   v = sondes.getTempCByIndex(IDX_SONDE_T_SEC);
   if (v > -100.0f) T_sec = v;                 // -127 = sonde déconnectée
   v = sondes.getTempCByIndex(IDX_SONDE_T_CAP);
-  if (v > -100.0f) T_cap = v;
+  if (v > -100.0f) T_cap_mesure = v;          // affichage seul (voir T_cap)
   sondes.requestTemperatures();               // conversion suivante
 
   v = dhtAmb.readTemperature(); if (!estNaN(v)) T_amb = v;
@@ -862,6 +1058,18 @@ void lireEntrees() {
     t_dernier_capteur = t_boucle;
     lireCapteursLents();
   }
+
+  /* --- Grandeurs FIXES (V3) : la valeur saisie remplace la mesure, par
+   * exemple si le capteur est en panne. Jamais pour T_sec ni la sécurité. --- */
+  if (Config.Fixe_T_amb) T_amb    = Config.Val_T_amb;
+  if (Config.Fixe_H_amb) H_amb    = Config.Val_H_amb;
+  if (Config.Fixe_H_sec) H_sec    = Config.Val_H_sec;
+  if (Config.Fixe_Press) Press_H2 = Config.Val_Press;
+
+  /* --- T_cap estimée (V3) : la sonde de plaque voit aussi la chaleur du
+   * brûleur intégré au capteur ; on ne pourrait jamais revenir au solaire
+   * en s'y fiant. Estimation paramétrable, à calibrer sur site. --- */
+  T_cap = T_amb + Config.DeltaT_Sol;
 
   /* --- H_fin est RECALCULÉ À CHAQUE ITÉRATION, jamais figé (§5) --- */
   H_fin = Config.H_produit_cible + H_amb;
@@ -939,15 +1147,13 @@ void gererCombustion(bool utiliseH2) {
         nb_echecs_allumage = 0;             // succès : on réinitialise le compteur
         phase_combustion = phaseDuPalier(palier);
       } else if ((t_boucle - chrono_allumage) >= (Config.Temps_Allumage * 1000UL)) {
+        /* V3 : même règle après une bascule H2<->GPL qu'au démarrage —
+         * MAX_ECHECS_AVANT_ALARME essais, chacun précédé d'une purge. */
         nb_echecs_allumage++;
         Serial.println("Echec d'allumage");
-        if (raison_purge == PURGE_BASCULEMENT) {
-          /* §13 : un échec de basculement n'est jamais bouclé silencieusement. */
-          Serial.println("Echec du basculement de source -> ERREUR_COMBUSTION");
-          entrerErreurCombustion(ERR_BASCULEMENT);
-        } else if (nb_echecs_allumage >= MAX_ECHECS_AVANT_ALARME) {
+        if (nb_echecs_allumage >= MAX_ECHECS_AVANT_ALARME) {
           Serial.println("Echecs d'allumage repetes -> ERREUR_COMBUSTION");
-          entrerErreurCombustion(ERR_ALLUMAGE_REPETE);
+          entrerErreurCombustion();
         } else {
           armerPurge(PURGE_ECHEC);          // fermeture totale puis nouvelle purge
         }
@@ -962,26 +1168,39 @@ void gererCombustion(bool utiliseH2) {
        * appliqué qu'ensuite — jamais avant (§7.3 v1 règle 2, toujours en
        * vigueur ; §14 v2 : extinction de flamme = situation de sécurité). */
       if (!Flame) {
-        nb_echecs_allumage++;
-        Serial.println("Perte de flamme inattendue : fermeture immediate");
-        if (nb_echecs_allumage >= MAX_ECHECS_AVANT_ALARME) {
-          entrerErreurCombustion(ERR_ALLUMAGE_REPETE);
-        } else {
+        /* V3 : extinction ANORMALE (gaz ouvert, flamme perdue). Le gaz est
+         * fermé dans cette même itération (< 1 boucle, quelques ms). La 1re
+         * perte du cycle est suivie d'une relance (purge complète puis
+         * allumage, règles normales) ; la suivante verrouille en URGENCE. */
+        fermerGaz();
+        if (nb_pertes_flamme < MAX_PERTES_FLAMME) {
+          nb_pertes_flamme++;
+          Serial.println("Perte de flamme : fermeture immediate, relance apres purge");
           armerPurge(PURGE_ECHEC);
+        } else {
+          Serial.println("Perte de flamme repetee -> URGENCE");
+          declencherUrgence(URG_PERTE_FLAMME);
         }
         break;
       }
 
-      {
+      if (!Config.Regul_Auto) {
+        /* Palier imposé par l'opérateur (remplace un T_sec fixe, interdit) :
+         * pas de régulation par T_sec, mais la sécurité surchauffe reste
+         * active sur la mesure réelle. */
+        palier = Config.Palier_Impose;
+      } else if ((t_boucle - t_derniere_regul) >= (Config.Periode_Regul * 1000UL)) {
+        /* Comparaison T_sec / seuils toutes les Periode_Regul secondes. */
+        t_derniere_regul = t_boucle;
         uint8_t palier_avant = palier;
         majPalier();
         if (palier == PALIER_0 && palier_avant != PALIER_0) {
           /* Consigne atteinte : coupure VOLONTAIRE, pas une panne. On ferme
            * tout et on impose la purge de sécurité avant toute réouverture,
            * exactement comme le demande §8 (« avant TOUTE ouverture de
-           * gaz »), mais sans déclencher d'alarme ni d'échec comptabilisé. */
+           * gaz »), mais sans déclencher d'alarme ni d'échec comptabilisé.
+           * Ce n'est PAS une fin de cycle (V3). */
           Serial.println("Consigne atteinte : coupure du bruleur (palier 0%)");
-          chrono_palier0 = t_boucle;
           armerPurge(PURGE_PALIER_0);
           break;
         }
@@ -1003,17 +1222,45 @@ void gererCombustion(bool utiliseH2) {
  * 12. pasFSM() — MACHINE À ÉTATS PRINCIPALE
  * ------------------------------------------------------------------------*/
 
-/* MODE_SOLAIRE : purement passif, aucune électrovanne. */
+/* MODE_SOLAIRE : purement passif, aucune électrovanne. Après un retour
+ * depuis la combustion, une POST-PURGE de Temps_Purge secondes évacue les
+ * gaz résiduels avant de passer aux ventilateurs solaires (V3). */
 static void etapeSolaire() {
   fermerGaz();
-  PWM_Purge   = PWM_ARRET;
-  PWM_Distrib = PWM_DISTRIB_SOLAIRE;
-  PWM_Extract = PWM_EXTRACT_SOLAIRE;
+  if (post_purge_active &&
+      (t_boucle - chrono_post_purge) < (Config.Temps_Purge * 1000UL)) {
+    PWM_Purge   = PWM_PURGE_BALAYAGE;
+    PWM_Distrib = PWM_DISTRIB_PURGE;
+    PWM_Extract = PWM_EXTRACT_PURGE;
+  } else {
+    post_purge_active = false;
+    PWM_Purge   = PWM_ARRET;
+    PWM_Distrib = PWM_DISTRIB_SOLAIRE;
+    PWM_Extract = PWM_EXTRACT_SOLAIRE;
+  }
   /* Brûleur à l'arrêt : la purge reste armée, de sorte qu'un futur passage en
    * combustion disposera bien de ses Temps_Purge secondes complètes. */
   phase_combustion = PH_PURGE;
   raison_purge = PURGE_DEMARRAGE;
   chrono_purge = t_boucle;
+}
+
+/* Palier de (ré)allumage quand on met en route la combustion (démarrage de
+ * cycle, ou solaire devenu insuffisant) :
+ *   - palier imposé par l'opérateur -> ce palier ;
+ *   - régime FROID -> 100 % ;
+ *   - régime CHAUD -> palier correspondant à T_sec (0 % = veille). */
+static uint8_t palierInitial() {
+  if (!Config.Regul_Auto) return Config.Palier_Impose;
+  return regime_chaud ? palierDepuisTsec() : PALIER_100;
+}
+
+/* Arme la purge qui précède la mise en combustion. Si le palier initial est
+ * 0 % (chambre déjà à la consigne), la purge débouche sur la veille : aucun
+ * allumage tant que T_sec ne redescend pas sous T3 - Hhyst/2. */
+static void armerPurgeMiseEnRoute() {
+  palier = palierInitial();
+  armerPurge(palier == PALIER_0 ? PURGE_PALIER_0 : PURGE_DEMARRAGE);
 }
 
 /* Arbitrage automatique des trois sources. Renvoie true si Source_Active a
@@ -1024,28 +1271,37 @@ static void etapeSolaire() {
 static bool arbitrageSource() {
   if (!Config.Mode_Auto) return false;
 
-  /* Priorité 1 : retour au solaire dès qu'il redevient disponible. */
-  if (Source_Active != SRC_SOLAIRE && T_cap >= SEUIL_T_CAP_SOLAIRE_ON) {
+  /* Priorité 1 : retour au solaire dès que T_cap (estimée) atteint le seuil
+   * ON — dans les deux régimes. Extinction NORMALE (pas une urgence) suivie
+   * d'une post-purge. */
+  if (Source_Active != SRC_SOLAIRE && T_cap >= seuilSolaireOn()) {
+    Serial.println("Solaire disponible : extinction normale + post-purge");
     fermerGaz();
     Source_Active = SRC_SOLAIRE;
+    post_purge_active = true;
+    chrono_post_purge = t_boucle;
     return true;
   }
 
-  /* Solaire insuffisant -> combustion. DÉMARRAGE À FROID : palier 100 %. */
-  if (Source_Active == SRC_SOLAIRE && T_cap < SEUIL_T_CAP_SOLAIRE_OFF) {
+  /* Solaire insuffisant -> combustion : sous ON en régime FROID, sous OFF
+   * en régime CHAUD. Palier d'allumage selon le régime (palierInitial). */
+  if (Source_Active == SRC_SOLAIRE && T_cap < seuilMaintienSolaire()) {
     Source_Active = (Press_H2 >= Config.Press_H2_Min) ? SRC_H2 : SRC_GPL;
-    palier = PALIER_100;
-    armerPurge(PURGE_DEMARRAGE);
+    post_purge_active = false;
+    nb_echecs_allumage = 0;
+    armerPurgeMiseEnRoute();
     return true;
   }
 
   /* Réservoir H2 épuisé -> GPL de secours.
-   * Le PALIER COURANT EST CONSERVÉ mais la purge reste obligatoire avant la
-   * remise en gaz (§8, §11 v2). */
+   * Le PALIER COURANT EST CONSERVÉ (mémoire de palier) mais la purge reste
+   * obligatoire avant la remise en gaz (§8, §11 v2). La nouvelle source
+   * dispose d'un jeu complet de MAX_ECHECS_AVANT_ALARME essais (V3). */
   if (Source_Active == SRC_H2 && Press_H2 < Config.Press_H2_Min) {
     Serial.println("Pression H2 basse : bascule GPL, palier conserve");
     armerPurge(PURGE_BASCULEMENT);
     Source_Active = SRC_GPL;
+    nb_echecs_allumage = 0;
     return true;
   }
 
@@ -1057,6 +1313,7 @@ static bool arbitrageSource() {
     Serial.println("Pression H2 retablie : bascule GPL -> H2, palier conserve");
     armerPurge(PURGE_BASCULEMENT);
     Source_Active = SRC_H2;
+    nb_echecs_allumage = 0;
     return true;
   }
 
@@ -1070,10 +1327,9 @@ static void synchroniserEtatSurSource() {
 }
 
 /* Cœur de régulation commun à MODE_SOLAIRE / MODE_H2 / MODE_GPL /
- * PROLONGATION / FIN_TEMPORISATION. `synchroniser` est faux quand l'état
- * affiché ne doit pas être écrasé par un changement de source (PROLONGATION,
- * FIN_TEMPORISATION) : la source peut changer sans que l'état principal en
- * sorte. */
+ * DEMANDE_PROLONGATION / PROLONGATION. `synchroniser` est faux quand l'état
+ * affiché ne doit pas être écrasé par un changement de source (demande et
+ * prolongation) : la source peut changer sans que l'état principal en sorte. */
 static void etapeRegulation(bool synchroniser) {
   arbitrageSource();
   if (synchroniser) synchroniserEtatSurSource();
@@ -1081,19 +1337,39 @@ static void etapeRegulation(bool synchroniser) {
   else                              gererCombustion(Source_Active == SRC_H2);
 }
 
+/* T_cible modifiable en cours de cycle (UP/DOWN) : recalcul immédiat des
+ * seuils, T_init inchangée (c'est la référence du démarrage). */
+static void reglerTcibleEnCycle() {
+  int sens = 0;
+  if (frontPris(B_UP))   sens = +1;
+  if (frontPris(B_DOWN)) sens = -1;
+  if (sens == 0) return;
+  Config.T_cible += sens * PAS_TEMPERATURE;
+  bornerConfig();
+  calculerSeuils();
+  sauverConfig();
+}
+
 /* Démarrage d'un cycle depuis ATTENTE_DEMARRAGE, CONFIG_MENU ou SECHAGE_TERMINE. */
 static void demarrerCycle() {
   if (Config.Mode_Auto) Config.T_init = T_sec;   // en auto, T_init est lue au capteur
   calculerSeuils();
 
-  palier = PALIER_100;                // le démarrage est TOUJOURS à 100 %
+  /* Repère thermique évalué à neuf (pas de mémoire du cycle précédent). */
+  regime_chaud = (T_sec >= Config.Seuil_Chaud);
+
   chrono_cycle = t_boucle;
+  t_derniere_regul = t_boucle;
   nb_echecs_allumage = 0;
-  arret_force_duree = false;
+  nb_pertes_flamme = 0;
+  humidite_deja_atteinte = false;
+  post_purge_active = false;
 
   if (Config.Mode_Auto) {
-    if (T_cap >= SEUIL_T_CAP_SOLAIRE_ON)              Source_Active = SRC_SOLAIRE;
-    else if (Press_H2 >= Config.Press_H2_Min)         Source_Active = SRC_H2;
+    /* Choix initial : FROID -> seuil ON seul (pas de zone morte) ;
+     * CHAUD -> le solaire est accepté dès OFF. */
+    if (T_cap >= seuilMaintienSolaire())               Source_Active = SRC_SOLAIRE;
+    else if (Press_H2 >= Config.Press_H2_Min)          Source_Active = SRC_H2;
     else                                               Source_Active = SRC_GPL;
   } else {
     if (Config.Choix_Mode == 1)      Source_Active = SRC_SOLAIRE;
@@ -1101,7 +1377,7 @@ static void demarrerCycle() {
     else                              Source_Active = SRC_GPL;
   }
 
-  armerPurge(PURGE_DEMARRAGE);        // purge avant toute mise en gaz
+  armerPurgeMiseEnRoute();            // purge avant toute mise en gaz
   synchroniserEtatSurSource();
 }
 
@@ -1114,27 +1390,8 @@ static void appliquerUrgence() {
   Buzzer = true;
 }
 
-/* Le stop-request (H_sec<=H_fin, verrouillé par Temps_Min_Fin, ou palier 0 %
- * durable) est-il actif ? Centralisé pour être utilisé à la fois pour
- * ENTRER en FIN_TEMPORISATION et pour l'ANNULER si la condition redevient
- * fausse (ex. H_sec remonte transitoirement). */
-static bool conditionFinDeCycle() {
-  bool duree_min_ecoulee = (t_boucle - chrono_cycle) >= (Config.Temps_Min_Fin * 60000UL);
-  if (!duree_min_ecoulee) return false;
-
-  if (H_sec <= H_fin) return true;
-
-  /* Critère secondaire (§6 v2) : T_sec a « durablement » atteint T_cible.
-   * On interprète cela comme le palier 0 % maintenu depuis au moins
-   * CONFIRMATION_PALIER_0_MS (voir AVIS n°6) — évite qu'un pic isolé de
-   * température déclenche une demande d'arrêt. */
-  bool a_palier_0 = (phase_combustion == PH_PURGE && raison_purge == PURGE_PALIER_0);
-  if (a_palier_0 && (t_boucle - chrono_palier0) >= CONFIRMATION_PALIER_0_MS) return true;
-
-  return false;
-}
-
 void pasFSM() {
+  majRegime();       // repère thermique FROID / CHAUD, mis à jour à chaque pas
 
   /* ===== switch principal : UN CASE PAR ÉTAT ===== */
   switch (etat_courant) {
@@ -1164,6 +1421,7 @@ void pasFSM() {
     case ETAT_MODE_SOLAIRE:
       Source_Active = SRC_SOLAIRE;
       page_affichage = frontPris(B_MENU) ? (uint8_t)(1 - page_affichage) : page_affichage;
+      reglerTcibleEnCycle();
       etapeRegulation(true);
       break;
 
@@ -1171,6 +1429,7 @@ void pasFSM() {
     case ETAT_MODE_H2:
       Source_Active = SRC_H2;
       page_affichage = frontPris(B_MENU) ? (uint8_t)(1 - page_affichage) : page_affichage;
+      reglerTcibleEnCycle();
       etapeRegulation(true);
       break;
 
@@ -1178,49 +1437,53 @@ void pasFSM() {
     case ETAT_MODE_GPL:
       Source_Active = SRC_GPL;
       page_affichage = frontPris(B_MENU) ? (uint8_t)(1 - page_affichage) : page_affichage;
+      reglerTcibleEnCycle();
       etapeRegulation(true);
       break;
 
-    /* --- Prolongation : régulation normale, plafonnée par Temps_Prolongation
-     * (voir AVIS n°2 : ce plafond est un ajout du cahier des charges v2 qui
-     * contredit la règle v1 « aucune limite de temps ». Assumé tel quel :
-     * si le plafond est atteint sans que H_fin soit atteint, le cycle est
-     * arrêté de force, produit potentiellement pas assez sec — voir la
-     * transition prioritaire dédiée plus bas). --- */
-    case ETAT_PROLONGATION:
-      page_affichage = frontPris(B_MENU) ? (uint8_t)(1 - page_affichage) : page_affichage;
+    /* --- Demande de prolongation (V3) : fin atteinte (humidité ou durée
+     * max, ou fin d'une prolongation). La régulation CONTINUE au même
+     * palier pendant la question. UP/DOWN règlent N (et prouvent la présence
+     * de l'opérateur : le délai de réponse repart), OK lance la prolongation,
+     * STOP termine, et sans aucune réponse pendant Temps_Reponse -> TERMINE
+     * (gaz fermé = 0 %). --- */
+    case ETAT_DEMANDE_PROLONGATION:
       etapeRegulation(false);
-      break;
-
-    /* --- Attente de confirmation d'arrêt (§6 v2) : la régulation continue
-     * normalement (le séchage n'est pas interrompu pendant la fenêtre de
-     * confirmation), le LCD affiche la demande + le compte à rebours. --- */
-    case ETAT_FIN_TEMPORISATION:
-      etapeRegulation(false);
-      if (frontPris(B_OK) || frontPris(B_STOP)) {
+      if (!humidite_deja_atteinte && conditionHumidite()) {
+        humidite_deja_atteinte = true;       // l'humidité arrive pendant la question
+        motif_demande = MOTIF_HUMIDITE;
+      }
+      if (frontPris(B_UP)) {
+        duree_prolongation_min += PAS_PROLONG;
+        if (duree_prolongation_min > PROLONG_MAX) duree_prolongation_min = PROLONG_MAX;
+        chrono_demande = t_boucle;
+      }
+      if (frontPris(B_DOWN)) {
+        duree_prolongation_min = (duree_prolongation_min > PROLONG_MIN + PAS_PROLONG)
+                                 ? duree_prolongation_min - PAS_PROLONG : PROLONG_MIN;
+        chrono_demande = t_boucle;
+      }
+      if (frontPris(B_OK)) {
+        Serial.print("Prolongation acceptee : ");
+        Serial.println((unsigned long)duree_prolongation_min);
+        changerEtat(ETAT_PROLONGATION);
+      } else if (frontPris(B_STOP)) {
         fermerGaz();
         changerEtat(ETAT_SECHAGE_TERMINE);
-      } else if (frontPris(B_MENU)) {
-        /* Report manuel : l'opérateur juge que ce n'est pas fini et redonne
-         * une pleine fenêtre de confirmation. NE PAS revenir directement à
-         * MODE_H2/GPL/SOLAIRE ici : tant que la condition de fin (H_sec <=
-         * H_fin) reste vraie, la transition prioritaire n°5 replongerait
-         * immédiatement en FIN_TEMPORISATION dès l'itération suivante — un
-         * aller-retour sans effet. Reporter l'échéance est le seul choix
-         * cohérent avec une condition qui persiste réellement. */
-        Serial.println("Arret automatique reporte par l'operateur");
-        chrono_arret_auto = t_boucle;
-      } else if (!conditionFinDeCycle()) {
-        /* La condition qui a déclenché la demande d'arrêt n'est plus vraie
-         * (ex. H_sec remonté transitoirement) : on annule automatiquement
-         * plutôt que d'attendre bêtement un minuteur sur une donnée
-         * périmée (AJOUT, robustesse). */
-        changerEtat((Source_Active == SRC_SOLAIRE) ? ETAT_MODE_SOLAIRE :
-                    (Source_Active == SRC_H2) ? ETAT_MODE_H2 : ETAT_MODE_GPL);
-      } else if ((t_boucle - chrono_arret_auto) >= (Config.Temps_Arret_Auto * 1000UL)) {
+      } else if ((t_boucle - chrono_demande) >= (Config.Temps_Reponse * 1000UL)) {
+        Serial.println("Pas de reponse operateur : sechage termine, bruleur a 0%");
         fermerGaz();
         changerEtat(ETAT_SECHAGE_TERMINE);
       }
+      break;
+
+    /* --- Prolongation de N min choisie par l'opérateur : même régulation,
+     * palier conservé. Sa fin (ou l'humidité atteinte si elle ne l'était pas
+     * encore) ramène à la demande : voir transitions prioritaires n°4. --- */
+    case ETAT_PROLONGATION:
+      page_affichage = frontPris(B_MENU) ? (uint8_t)(1 - page_affichage) : page_affichage;
+      reglerTcibleEnCycle();
+      etapeRegulation(false);
       break;
 
     /* --- Séchage terminé : gaz fermé, extraction faible pour refroidir --- */
@@ -1229,16 +1492,16 @@ void pasFSM() {
       PWM_Purge = PWM_ARRET;
       PWM_Distrib = PWM_ARRET;
       PWM_Extract = PWM_EXTRACT_REFROID;
-      if (frontPris(B_START)) { arret_force_duree = false; demarrerCycle(); }
+      if (frontPris(B_START)) { demarrerCycle(); }
       else if (frontPris(B_MENU)) { Menu_Index = MENU_MODE_AUTO; changerEtat(ETAT_CONFIG_MENU); }
       else if ((t_boucle - chrono_refroidissement) >= DUREE_REFROIDISSEMENT) {
         changerEtat(ETAT_ATTENTE_DEMARRAGE);
       }
       break;
 
-    /* --- Erreur de combustion (§13) : basculement raté ou échecs répétés.
+    /* --- Erreur de combustion (§13) : échecs d'allumage répétés.
      * Aucune réouverture automatique ; l'opérateur choisit REESSAYER /
-     * MANUEL / AUTOMATIQUE. --- */
+     * MANUEL / AUTOMATIQUE. Reprise au palier mémorisé, après purge. --- */
     case ETAT_ERREUR_COMBUSTION:
       fermerGaz();
       PWM_Purge   = PWM_PURGE_URGENCE;
@@ -1251,12 +1514,10 @@ void pasFSM() {
         changerEtat(ETAT_SECHAGE_TERMINE);
       } else if (frontPris(B_OK)) {
         Buzzer = false;
-        RaisonPurge raison_reprise = (raison_erreur_combustion == ERR_BASCULEMENT)
-                                        ? PURGE_BASCULEMENT : PURGE_ECHEC;
         switch (Choix_Erreur) {
           case CHOIX_ERR_REESSAYER:
             nb_echecs_allumage = 0;
-            armerPurge(raison_reprise);
+            armerPurge(PURGE_ECHEC);
             synchroniserEtatSurSource();
             break;
           case CHOIX_ERR_MANUEL:
@@ -1268,14 +1529,16 @@ void pasFSM() {
             Config.Mode_Auto = true;
             sauverConfig();
             nb_echecs_allumage = 0;
-            armerPurge(raison_reprise);
+            armerPurge(PURGE_ECHEC);
             synchroniserEtatSurSource();
             break;
         }
       }
       break;
 
-    /* --- Urgence ATEX : repli permanent + double chemin de réarmement (§15) --- */
+    /* --- Urgence : repli permanent + double chemin de réarmement (§15).
+     * Réarmement refusé tant qu'une cause est présente, y compris une
+     * flamme encore détectée. Le cycle en cours n'est jamais repris. --- */
     case ETAT_URGENCE_ATEX:
       appliquerUrgence();
       if (frontPris(B_REARM) || demande_rearm_ihm) {
@@ -1287,6 +1550,8 @@ void pasFSM() {
           palier = PALIER_100;
           phase_combustion = PH_PURGE;
           raison_purge = PURGE_DEMARRAGE;
+          cause_urgence = URG_AUCUNE;
+          flamme_parasite_armee = false;
           Menu_Index = MENU_MODE_AUTO;
           changerEtat(ETAT_ATTENTE_DEMARRAGE);
         }
@@ -1304,20 +1569,36 @@ void pasFSM() {
    * rien d'incohérent n'atteint jamais les actionneurs. Ordre = priorité de
    * sécurité décroissante (§19 v2). */
 
-  /* 1. URGENCE_ATEX — priorité absolue, évaluée à chaque itération. */
-  if (causeUrgencePresente()) {
-    if (etat_courant != ETAT_URGENCE_ATEX) {
-      Serial.println("URGENCE ATEX : fuite gaz ou arret d'urgence");
-      changerEtat(ETAT_URGENCE_ATEX);
-    }
-    appliquerUrgence();
+  /* 1a. URGENCE — fuite de gaz ou arrêt d'urgence : priorité absolue,
+   * évaluée à chaque itération depuis n'importe quel état. */
+  CauseUrgence cause = causeGazOuAU();
+  if (cause != URG_AUCUNE) {
+    declencherUrgence(cause);
     return;                       // aucune autre transition ne peut s'appliquer
   }
 
+  /* 1b. URGENCE — flamme vue alors que le gaz est commandé FERMÉ (vanne qui
+   * fuit, capteur défaillant). Délai DELAI_FLAMME_PARASITE_MS pour laisser la
+   * flamme s'éteindre physiquement après une fermeture normale du gaz. */
+  if (etat_courant != ETAT_URGENCE_ATEX) {
+    bool gaz_commande = V_H2 || V_But;
+    if (Flame && !gaz_commande) {
+      if (!flamme_parasite_armee) {
+        flamme_parasite_armee = true;
+        chrono_flamme_parasite = t_boucle;
+      } else if ((t_boucle - chrono_flamme_parasite) >= DELAI_FLAMME_PARASITE_MS) {
+        declencherUrgence(URG_FLAMME_PARASITE);
+        return;
+      }
+    } else {
+      flamme_parasite_armee = false;
+    }
+  }
+
   /* 2. Arrêt propre demandé par l'opérateur (Btn_Stop), depuis un cycle en
-   * cours (les cas particuliers ETAT_FIN_TEMPORISATION / ERREUR_COMBUSTION
-   * traitent déjà Btn_Stop eux-mêmes dans leur propre case). */
-  if (cycleEnCours() && etat_courant != ETAT_FIN_TEMPORISATION && frontPris(B_STOP)) {
+   * cours (DEMANDE_PROLONGATION et ERREUR_COMBUSTION traitent déjà Btn_Stop
+   * eux-mêmes dans leur propre case). */
+  if (cycleEnCours() && etat_courant != ETAT_DEMANDE_PROLONGATION && frontPris(B_STOP)) {
     fermerGaz();
     changerEtat(ETAT_SECHAGE_TERMINE);
     return;
@@ -1325,7 +1606,7 @@ void pasFSM() {
 
   /* 3. Sécurité surchauffe, indépendante du palier 0 % : si jamais la
    * régulation par palier était mise en défaut (sonde décalée, charge
-   * anormale), ce garde-fou coupe quand même le brûleur. */
+   * anormale, palier imposé), ce garde-fou coupe quand même le brûleur. */
   if (cycleEnCours() && T_sec >= T_SEC_MAX_SECURITE) {
     Serial.println("Surchauffe chambre : arret du bruleur");
     fermerGaz();
@@ -1333,34 +1614,23 @@ void pasFSM() {
     return;
   }
 
-  /* 4. Plafond de PROLONGATION (§6 v2, AVIS n°2) : arrêt forcé, même si
-   * H_fin n'est pas atteint. Direct vers SECHAGE_TERMINE (pas de fenêtre de
-   * confirmation : le plafond est déjà, par définition, un dépassement). */
-  if (etat_courant == ETAT_PROLONGATION &&
-      (t_boucle - chrono_prolongation) >= (Config.Temps_Prolongation * 60000UL)) {
-    Serial.println("Temps_Prolongation depasse : arret force, humidite cible non garantie");
-    arret_force_duree = true;
-    fermerGaz();
-    changerEtat(ETAT_SECHAGE_TERMINE);
-    return;
-  }
-
-  /* 5. Demande d'arrêt (§6 v2) : H_sec <= H_fin (verrouillé par
-   * Temps_Min_Fin) ou consigne atteinte durablement -> fenêtre de
-   * confirmation avant arrêt automatique. */
-  if ((etat_courant == ETAT_MODE_SOLAIRE || etat_courant == ETAT_MODE_H2 ||
-       etat_courant == ETAT_MODE_GPL || etat_courant == ETAT_PROLONGATION) &&
-      conditionFinDeCycle()) {
-    changerEtat(ETAT_FIN_TEMPORISATION);
-    return;
-  }
-
-  /* 6. Durée maximale dépassée sans avoir atteint la condition de fin ->
-   * PROLONGATION. */
-  if (cycleEnCours() && etat_courant != ETAT_PROLONGATION &&
-      etat_courant != ETAT_FIN_TEMPORISATION &&
-      (t_boucle - chrono_cycle) >= (Config.Duree_Max_Cycle * 60000UL)) {
-    changerEtat(ETAT_PROLONGATION);
+  /* 4. Fin de cycle (V3) -> DEMANDE_PROLONGATION.
+   *   Phase normale : humidité atteinte (prioritaire) sinon Duree_Max_Cycle.
+   *   Prolongation  : humidité atteinte si elle ne l'était pas encore
+   *                   (sinon on respecte les N min choisies), puis fin des
+   *                   N min -> on redemande. */
+  if (etatNormal()) {
+    if (conditionHumidite()) {
+      entrerDemande(MOTIF_HUMIDITE);
+    } else if ((t_boucle - chrono_cycle) >= (Config.Duree_Max_Cycle * 60000UL)) {
+      entrerDemande(MOTIF_DUREE_MAX);
+    }
+  } else if (etat_courant == ETAT_PROLONGATION) {
+    if (!humidite_deja_atteinte && conditionHumidite()) {
+      entrerDemande(MOTIF_HUMIDITE);
+    } else if ((t_boucle - chrono_prolongation) >= (duree_prolongation_min * 60000UL)) {
+      entrerDemande(MOTIF_FIN_PROLONGATION);
+    }
   }
 }
 
@@ -1399,67 +1669,176 @@ void ecrireSorties() {
 /* Édite le champ courant du menu selon `sens` (+1 / -1), puis reborne
  * systématiquement toute la config (défense en profondeur : un champ ne
  * peut jamais sortir de sa plage sûre, quel que soit le pas appliqué). */
+/* Incrément/décrément d'une durée entière non signée, sans passer sous 0. */
+static void pasEntier(uint32_t& v, int sens, uint32_t pas) {
+  if (sens > 0) v += pas;
+  else          v = (v > pas) ? v - pas : 0UL;
+}
+
 static void modifierChampMenu(int sens) {
   switch (Menu_Index) {
-    case MENU_MODE_AUTO:
-      Config.Mode_Auto = !Config.Mode_Auto;
-      break;
+    case MENU_MODE_AUTO:      Config.Mode_Auto = !Config.Mode_Auto; break;
     case MENU_CHOIX_MODE:
       if (sens > 0) Config.Choix_Mode = (Config.Choix_Mode >= 3) ? 1 : (uint8_t)(Config.Choix_Mode + 1);
       else          Config.Choix_Mode = (Config.Choix_Mode <= 1) ? 3 : (uint8_t)(Config.Choix_Mode - 1);
       break;
-    case MENU_T_CIBLE:
-      Config.T_cible += sens * PAS_TEMPERATURE;
+    case MENU_T_CIBLE:        Config.T_cible += sens * PAS_TEMPERATURE; break;
+    case MENU_T_INIT:         Config.T_init += sens * PAS_TEMPERATURE; break;
+    case MENU_H_INITIAL:      Config.H_initial += sens * PAS_HUMIDITE; break;
+    case MENU_H_PRODUIT:      Config.H_produit_cible += sens * PAS_HUMIDITE; break;
+    case MENU_DUREE_MAX:      pasEntier(Config.Duree_Max_Cycle, sens, PAS_DUREE_MIN); break;
+    case MENU_PROLONG_DEFAUT: pasEntier(Config.Prolong_Defaut, sens, PAS_PROLONG); break;
+    case MENU_TEMPS_REPONSE:  pasEntier(Config.Temps_Reponse, sens, PAS_TEMPS_REPONSE); break;
+    case MENU_TEMPS_MIN_FIN:  pasEntier(Config.Temps_Min_Fin, sens, PAS_DUREE_MIN); break;
+    case MENU_HHYST:          Config.Hhyst += sens * PAS_HHYST; break;
+    case MENU_PERIODE_REGUL:  pasEntier(Config.Periode_Regul, sens, PAS_PERIODE_REGUL); break;
+    case MENU_REGUL_AUTO:     Config.Regul_Auto = !Config.Regul_Auto; break;
+    case MENU_PALIER_IMPOSE:
+      if (sens > 0) Config.Palier_Impose = (Config.Palier_Impose >= PALIER_33) ? PALIER_100 : (uint8_t)(Config.Palier_Impose + 1);
+      else          Config.Palier_Impose = (Config.Palier_Impose == PALIER_100) ? PALIER_33 : (uint8_t)(Config.Palier_Impose - 1);
       break;
-    case MENU_T_INIT:
-      Config.T_init += sens * PAS_TEMPERATURE;
-      break;
-    case MENU_H_INITIAL:
-      Config.H_initial += sens * PAS_HUMIDITE;
-      break;
-    case MENU_H_PRODUIT:
-      Config.H_produit_cible += sens * PAS_HUMIDITE;
-      break;
-    case MENU_DUREE_MAX:
-      Config.Duree_Max_Cycle = (sens > 0) ? (Config.Duree_Max_Cycle + PAS_DUREE_MIN)
-                              : (Config.Duree_Max_Cycle > PAS_DUREE_MIN ? Config.Duree_Max_Cycle - PAS_DUREE_MIN : 0UL);
-      break;
-    case MENU_TEMPS_PROLONGATION:
-      Config.Temps_Prolongation = (sens > 0) ? (Config.Temps_Prolongation + PAS_DUREE_MIN)
-                                 : (Config.Temps_Prolongation > PAS_DUREE_MIN ? Config.Temps_Prolongation - PAS_DUREE_MIN : 0UL);
-      break;
-    case MENU_HHYST:
-      Config.Hhyst += sens * PAS_HHYST;
-      break;
-    case MENU_TEMPS_PURGE:
-      Config.Temps_Purge = (sens > 0) ? (Config.Temps_Purge + PAS_TEMPS_SEC)
-                          : (Config.Temps_Purge > PAS_TEMPS_SEC ? Config.Temps_Purge - PAS_TEMPS_SEC : 0UL);
-      break;
-    case MENU_TEMPS_ALLUMAGE:
-      Config.Temps_Allumage = (sens > 0) ? (Config.Temps_Allumage + PAS_TEMPS_ALLUMAGE)
-                             : (Config.Temps_Allumage > PAS_TEMPS_ALLUMAGE ? Config.Temps_Allumage - PAS_TEMPS_ALLUMAGE : 0UL);
-      break;
-    case MENU_TEMPS_MIN_FIN:
-      Config.Temps_Min_Fin = (sens > 0) ? (Config.Temps_Min_Fin + PAS_DUREE_MIN)
-                            : (Config.Temps_Min_Fin > PAS_DUREE_MIN ? Config.Temps_Min_Fin - PAS_DUREE_MIN : 0UL);
-      break;
-    case MENU_TEMPS_ARRET_AUTO:
-      Config.Temps_Arret_Auto = (sens > 0) ? (Config.Temps_Arret_Auto + PAS_TEMPS_ARRET_AUTO)
-                               : (Config.Temps_Arret_Auto > PAS_TEMPS_ARRET_AUTO ? Config.Temps_Arret_Auto - PAS_TEMPS_ARRET_AUTO : 0UL);
-      break;
-    case MENU_PRESS_H2_MIN:
-      Config.Press_H2_Min += sens * PAS_PRESSION;
-      break;
-    case MENU_SEUIL_MQ8:
-      Config.Seuil_MQ8 += sens * PAS_SEUIL_MQ;
-      break;
-    case MENU_SEUIL_MQ6:
-      Config.Seuil_MQ6 += sens * PAS_SEUIL_MQ;
-      break;
-    default:
-      break;   // MENU_REARMEMENT : rien à incrémenter
+    case MENU_DELTA_T_SOL:    Config.DeltaT_Sol += sens * PAS_TEMPERATURE; break;
+    case MENU_MARGE_SOL:      Config.Marge_Sol += sens * PAS_TEMPERATURE; break;
+    case MENU_HYST_SOL:       Config.Hyst_Sol += sens * PAS_TEMPERATURE; break;
+    case MENU_SEUIL_CHAUD:    Config.Seuil_Chaud += sens * PAS_TEMPERATURE; break;
+    case MENU_TEMPS_PURGE:    pasEntier(Config.Temps_Purge, sens, PAS_TEMPS_SEC); break;
+    case MENU_TEMPS_ALLUMAGE: pasEntier(Config.Temps_Allumage, sens, PAS_TEMPS_ALLUMAGE); break;
+    case MENU_PRESS_H2_MIN:   Config.Press_H2_Min += sens * PAS_PRESSION; break;
+    case MENU_SEUIL_MQ8:      Config.Seuil_MQ8 += sens * PAS_SEUIL_MQ; break;
+    case MENU_SEUIL_MQ6:      Config.Seuil_MQ6 += sens * PAS_SEUIL_MQ; break;
+    case MENU_T_AMB_MODE:     Config.Fixe_T_amb = !Config.Fixe_T_amb; break;
+    case MENU_T_AMB_VAL:      Config.Val_T_amb += sens * PAS_TEMPERATURE; break;
+    case MENU_H_AMB_MODE:     Config.Fixe_H_amb = !Config.Fixe_H_amb; break;
+    case MENU_H_AMB_VAL:      Config.Val_H_amb += sens * PAS_HUMIDITE; break;
+    case MENU_H_SEC_MODE:     Config.Fixe_H_sec = !Config.Fixe_H_sec; break;
+    case MENU_H_SEC_VAL:      Config.Val_H_sec += sens * PAS_HUMIDITE; break;
+    case MENU_PRESS_MODE:     Config.Fixe_Press = !Config.Fixe_Press; break;
+    case MENU_PRESS_VAL:      Config.Val_Press += sens * PAS_PRESSION; break;
+    default: break;   // MENU_REARMEMENT : rien à incrémenter
   }
   bornerConfig();
+}
+
+static const char* nomPalier(uint8_t p) {
+  if (p == PALIER_100) return "100%";
+  if (p == PALIER_67)  return "67%";
+  if (p == PALIER_33)  return "33%";
+  return "0%";
+}
+
+static const char* nomCauseUrgence(CauseUrgence c) {
+  switch (c) {
+    case URG_FUITE_H2:        return "URG: FUITE H2";
+    case URG_FUITE_GPL:       return "URG: FUITE GPL";
+    case URG_ARRET_URGENCE:   return "URG: ARRET URGENCE";
+    case URG_PERTE_FLAMME:    return "URG: PERTE FLAMME";
+    case URG_FLAMME_PARASITE: return "URG: FLAMME PARASITE";
+    default:                  return "!! URGENCE ATEX !!";
+  }
+}
+
+/* Libellé (ligne 1) et valeur (ligne 2) du champ de menu courant. */
+static void composerChampMenu(char* l1, char* l2, uint8_t T) {
+  char a[10];
+  switch (Menu_Index) {
+    case MENU_MODE_AUTO:
+      snprintf(l1, T, "Mode de marche");
+      snprintf(l2, T, "%s", Config.Mode_Auto ? "AUTOMATIQUE" : "MANUEL"); break;
+    case MENU_CHOIX_MODE:
+      snprintf(l1, T, "Source (mode manuel)");
+      snprintf(l2, T, "%s", Config.Choix_Mode == 1 ? "SOLAIRE" : (Config.Choix_Mode == 2 ? "H2" : "GPL")); break;
+    case MENU_T_CIBLE:
+      fmt1(a, sizeof(a), Config.T_cible);
+      snprintf(l1, T, "Temperature cible"); snprintf(l2, T, "%s C", a); break;
+    case MENU_T_INIT:
+      fmt1(a, sizeof(a), Config.T_init);
+      snprintf(l1, T, "Temp init (manuel)"); snprintf(l2, T, "%s C", a); break;
+    case MENU_H_INITIAL:
+      fmt1(a, sizeof(a), Config.H_initial);
+      snprintf(l1, T, "Humidite initiale"); snprintf(l2, T, "%s %%", a); break;
+    case MENU_H_PRODUIT:
+      fmt1(a, sizeof(a), Config.H_produit_cible);
+      snprintf(l1, T, "Humidite visee"); snprintf(l2, T, "%s %%", a); break;
+    case MENU_DUREE_MAX:
+      snprintf(l1, T, "Duree max sechage");
+      snprintf(l2, T, "%lu min", (unsigned long)Config.Duree_Max_Cycle); break;
+    case MENU_PROLONG_DEFAUT:
+      snprintf(l1, T, "Prolongation propos.");
+      snprintf(l2, T, "%lu min", (unsigned long)Config.Prolong_Defaut); break;
+    case MENU_TEMPS_REPONSE:
+      snprintf(l1, T, "Delai reponse oper.");
+      snprintf(l2, T, "%lu s", (unsigned long)Config.Temps_Reponse); break;
+    case MENU_TEMPS_MIN_FIN:
+      snprintf(l1, T, "Duree min avant fin");
+      snprintf(l2, T, "%lu min", (unsigned long)Config.Temps_Min_Fin); break;
+    case MENU_HHYST:
+      fmt1(a, sizeof(a), Config.Hhyst);
+      snprintf(l1, T, "Hysteresis paliers"); snprintf(l2, T, "%s C", a); break;
+    case MENU_PERIODE_REGUL:
+      snprintf(l1, T, "Periode regulation");
+      snprintf(l2, T, "%lu s", (unsigned long)Config.Periode_Regul); break;
+    case MENU_REGUL_AUTO:
+      snprintf(l1, T, "Regulation palier");
+      snprintf(l2, T, "%s", Config.Regul_Auto ? "AUTO (par T_sec)" : "PALIER IMPOSE"); break;
+    case MENU_PALIER_IMPOSE:
+      snprintf(l1, T, "Palier impose");
+      snprintf(l2, T, "%s", nomPalier(Config.Palier_Impose)); break;
+    case MENU_DELTA_T_SOL:
+      fmt1(a, sizeof(a), Config.DeltaT_Sol);
+      snprintf(l1, T, "Tcap=Tamb+ DeltaT"); snprintf(l2, T, "%s C", a); break;
+    case MENU_MARGE_SOL:
+      fmt1(a, sizeof(a), Config.Marge_Sol);
+      snprintf(l1, T, "Solaire ON=Tc+marge"); snprintf(l2, T, "%s C", a); break;
+    case MENU_HYST_SOL:
+      fmt1(a, sizeof(a), Config.Hyst_Sol);
+      snprintf(l1, T, "Solaire OFF=ON-hyst"); snprintf(l2, T, "%s C", a); break;
+    case MENU_SEUIL_CHAUD:
+      fmt1(a, sizeof(a), Config.Seuil_Chaud);
+      snprintf(l1, T, "Repere CHAUD Tsec>="); snprintf(l2, T, "%s C", a); break;
+    case MENU_TEMPS_PURGE:
+      snprintf(l1, T, "Duree de purge");
+      snprintf(l2, T, "%lu s", (unsigned long)Config.Temps_Purge); break;
+    case MENU_TEMPS_ALLUMAGE:
+      snprintf(l1, T, "Delai max allumage");
+      snprintf(l2, T, "%lu s", (unsigned long)Config.Temps_Allumage); break;
+    case MENU_PRESS_H2_MIN:
+      fmt1(a, sizeof(a), Config.Press_H2_Min);
+      snprintf(l1, T, "Pression H2 min"); snprintf(l2, T, "%s bar", a); break;
+    case MENU_SEUIL_MQ8:
+      snprintf(l1, T, "Seuil fuite H2");
+      snprintf(l2, T, "%d / 1023", Config.Seuil_MQ8); break;
+    case MENU_SEUIL_MQ6:
+      snprintf(l1, T, "Seuil fuite GPL");
+      snprintf(l2, T, "%d / 1023", Config.Seuil_MQ6); break;
+    case MENU_T_AMB_MODE:
+      snprintf(l1, T, "T ambiante");
+      snprintf(l2, T, "%s", Config.Fixe_T_amb ? "FIXE (saisie)" : "AUTO (capteur)"); break;
+    case MENU_T_AMB_VAL:
+      fmt1(a, sizeof(a), Config.Val_T_amb);
+      snprintf(l1, T, "T ambiante fixe"); snprintf(l2, T, "%s C", a); break;
+    case MENU_H_AMB_MODE:
+      snprintf(l1, T, "H ambiante");
+      snprintf(l2, T, "%s", Config.Fixe_H_amb ? "FIXE (saisie)" : "AUTO (capteur)"); break;
+    case MENU_H_AMB_VAL:
+      fmt1(a, sizeof(a), Config.Val_H_amb);
+      snprintf(l1, T, "H ambiante fixe"); snprintf(l2, T, "%s %%", a); break;
+    case MENU_H_SEC_MODE:
+      snprintf(l1, T, "H sechoir");
+      snprintf(l2, T, "%s", Config.Fixe_H_sec ? "FIXE (saisie)" : "AUTO (capteur)"); break;
+    case MENU_H_SEC_VAL:
+      fmt1(a, sizeof(a), Config.Val_H_sec);
+      snprintf(l1, T, "H sechoir fixe"); snprintf(l2, T, "%s %%", a); break;
+    case MENU_PRESS_MODE:
+      snprintf(l1, T, "Pression H2");
+      snprintf(l2, T, "%s", Config.Fixe_Press ? "FIXE (saisie)" : "AUTO (capteur)"); break;
+    case MENU_PRESS_VAL:
+      fmt1(a, sizeof(a), Config.Val_Press);
+      snprintf(l1, T, "Pression H2 fixe"); snprintf(l2, T, "%s bar", a); break;
+    case MENU_REARMEMENT:
+      snprintf(l1, T, "Rearmement");
+      snprintf(l2, T, "OK pour rearmer"); break;
+    default: break;
+  }
 }
 
 /* Construit les 4 lignes de l'afficheur 20x4 selon l'état courant.
@@ -1471,100 +1850,19 @@ static void composerLCD(char lignes[4][LCD_COLONNES + 1]) {
   for (uint8_t i = 0; i < 4; i++) lignes[i][0] = '\0';
   const uint8_t T = LCD_COLONNES + 1;
 
-  /* --- Menu de configuration / urgence ATEX (mêmes champs, réarmement en plus) --- */
+  /* --- Menu de configuration / urgence (mêmes champs, réarmement en plus) --- */
   if (etat_courant == ETAT_CONFIG_MENU || etat_courant == ETAT_URGENCE_ATEX) {
-    snprintf(lignes[0], T, "%s", etat_courant == ETAT_URGENCE_ATEX ? "!! URGENCE ATEX !!" : "-- PARAMETRES --");
-    switch (Menu_Index) {
-      case MENU_MODE_AUTO:
-        snprintf(lignes[1], T, "Mode de marche");
-        snprintf(lignes[2], T, "%s", Config.Mode_Auto ? "AUTOMATIQUE" : "MANUEL");
-        break;
-      case MENU_CHOIX_MODE:
-        snprintf(lignes[1], T, "Source (mode manuel)");
-        snprintf(lignes[2], T, "%s", Config.Choix_Mode == 1 ? "SOLAIRE" : (Config.Choix_Mode == 2 ? "H2" : "GPL"));
-        break;
-      case MENU_T_CIBLE:
-        fmt1(a, sizeof(a), Config.T_cible);
-        snprintf(lignes[1], T, "Temperature cible");
-        snprintf(lignes[2], T, "%s C", a);
-        break;
-      case MENU_T_INIT:
-        fmt1(a, sizeof(a), Config.T_init);
-        snprintf(lignes[1], T, "Temp init (manuel)");
-        snprintf(lignes[2], T, "%s C", a);
-        break;
-      case MENU_H_INITIAL:
-        fmt1(a, sizeof(a), Config.H_initial);
-        snprintf(lignes[1], T, "Humidite initiale");
-        snprintf(lignes[2], T, "%s %%", a);
-        break;
-      case MENU_H_PRODUIT:
-        fmt1(a, sizeof(a), Config.H_produit_cible);
-        snprintf(lignes[1], T, "Humidite visee");
-        snprintf(lignes[2], T, "%s %%", a);
-        break;
-      case MENU_DUREE_MAX:
-        snprintf(lignes[1], T, "Duree max cycle");
-        snprintf(lignes[2], T, "%lu min", (unsigned long)Config.Duree_Max_Cycle);
-        break;
-      case MENU_TEMPS_PROLONGATION:
-        snprintf(lignes[1], T, "Plafond prolong.");
-        snprintf(lignes[2], T, "%lu min", (unsigned long)Config.Temps_Prolongation);
-        break;
-      case MENU_HHYST:
-        fmt1(a, sizeof(a), Config.Hhyst);
-        snprintf(lignes[1], T, "Hysteresis (bande)");
-        snprintf(lignes[2], T, "%s C", a);
-        break;
-      case MENU_TEMPS_PURGE:
-        snprintf(lignes[1], T, "Duree de purge");
-        snprintf(lignes[2], T, "%lu s", (unsigned long)Config.Temps_Purge);
-        break;
-      case MENU_TEMPS_ALLUMAGE:
-        snprintf(lignes[1], T, "Delai max allumage");
-        snprintf(lignes[2], T, "%lu s", (unsigned long)Config.Temps_Allumage);
-        break;
-      case MENU_TEMPS_MIN_FIN:
-        snprintf(lignes[1], T, "Duree min avant fin");
-        snprintf(lignes[2], T, "%lu min", (unsigned long)Config.Temps_Min_Fin);
-        break;
-      case MENU_TEMPS_ARRET_AUTO:
-        snprintf(lignes[1], T, "Delai arret auto");
-        snprintf(lignes[2], T, "%lu s", (unsigned long)Config.Temps_Arret_Auto);
-        break;
-      case MENU_PRESS_H2_MIN:
-        fmt1(a, sizeof(a), Config.Press_H2_Min);
-        snprintf(lignes[1], T, "Pression H2 min");
-        snprintf(lignes[2], T, "%s bar", a);
-        break;
-      case MENU_SEUIL_MQ8:
-        snprintf(lignes[1], T, "Seuil fuite H2");
-        snprintf(lignes[2], T, "%d / 1023", Config.Seuil_MQ8);
-        break;
-      case MENU_SEUIL_MQ6:
-        snprintf(lignes[1], T, "Seuil fuite GPL");
-        snprintf(lignes[2], T, "%d / 1023", Config.Seuil_MQ6);
-        break;
-      case MENU_REARMEMENT:
-        snprintf(lignes[1], T, "Rearmement ATEX");
-        snprintf(lignes[2], T, "OK pour rearmer");
-        break;
-      default:
-        break;
-    }
+    snprintf(lignes[0], T, "%s", etat_courant == ETAT_URGENCE_ATEX
+                                   ? nomCauseUrgence(cause_urgence) : "-- PARAMETRES --");
+    composerChampMenu(lignes[1], lignes[2], T);
     snprintf(lignes[3], T, "MENU +/- OK");
     return;
   }
 
-  /* --- Échec de basculement / échecs d'allumage répétés (§13) --- */
+  /* --- Échecs d'allumage répétés (§13) --- */
   if (etat_courant == ETAT_ERREUR_COMBUSTION) {
-    if (raison_erreur_combustion == ERR_BASCULEMENT) {
-      snprintf(lignes[0], T, "BASCULEMENT ECHEC");
-      snprintf(lignes[1], T, "-> %s impossible", nomSource(Source_Active));
-    } else {
-      snprintf(lignes[0], T, "ALLUMAGE ECHEC");
-      snprintf(lignes[1], T, "Echecs: %u", nb_echecs_allumage);
-    }
+    snprintf(lignes[0], T, "ALLUMAGE ECHEC");
+    snprintf(lignes[1], T, "Echecs:%u  %s", nb_echecs_allumage, nomSource(Source_Active));
     snprintf(lignes[2], T, "%sRES %sMAN %sAUTO",
              Choix_Erreur == CHOIX_ERR_REESSAYER   ? ">" : " ",
              Choix_Erreur == CHOIX_ERR_MANUEL      ? ">" : " ",
@@ -1573,15 +1871,17 @@ static void composerLCD(char lignes[4][LCD_COLONNES + 1]) {
     return;
   }
 
-  /* --- Demande d'arrêt (§6 v2) --- */
-  if (etat_courant == ETAT_FIN_TEMPORISATION) {
-    uint32_t ecoule = t_boucle - chrono_arret_auto;
-    uint32_t total_ms = Config.Temps_Arret_Auto * 1000UL;
+  /* --- Demande de prolongation (V3) --- */
+  if (etat_courant == ETAT_DEMANDE_PROLONGATION) {
+    uint32_t ecoule = t_boucle - chrono_demande;
+    uint32_t total_ms = Config.Temps_Reponse * 1000UL;
     uint32_t restant_s = (ecoule < total_ms) ? (total_ms - ecoule) / 1000UL : 0UL;
-    snprintf(lignes[0], T, "CONSIGNE ATTEINTE");
-    snprintf(lignes[1], T, "ARRET DU SECHAGE ?");
-    snprintf(lignes[2], T, "AUTO DANS %lu s", (unsigned long)restant_s);
-    snprintf(lignes[3], T, "OK:stop MENU:report");
+    snprintf(lignes[0], T, "%s",
+             motif_demande == MOTIF_HUMIDITE ? "HUMIDITE ATTEINTE" :
+             (motif_demande == MOTIF_DUREE_MAX ? "DUREE MAX ATTEINTE" : "PROLONGATION FINIE"));
+    snprintf(lignes[1], T, "Prolonger %lu min ?", (unsigned long)duree_prolongation_min);
+    snprintf(lignes[2], T, "Fin auto dans %lus", (unsigned long)restant_s);
+    snprintf(lignes[3], T, "OK:oui STOP:fin +/-");
     return;
   }
 
@@ -1597,31 +1897,46 @@ static void composerLCD(char lignes[4][LCD_COLONNES + 1]) {
   }
   if (etat_courant == ETAT_SECHAGE_TERMINE) {
     fmt1(a, sizeof(a), H_sec);
-    snprintf(lignes[0], T, "%s", arret_force_duree ? "ARRET FORCE (duree)" : "SECHAGE TERMINE");
-    snprintf(lignes[1], T, "%s", arret_force_duree ? "Humidite non garantie" : "Cycle complet");
+    snprintf(lignes[0], T, "SECHAGE TERMINE");
+    snprintf(lignes[1], T, "Bruleur 0%%");
     snprintf(lignes[2], T, "Hsec fin %s%%", a);
     snprintf(lignes[3], T, "START:relancer");
     return;
   }
 
-  /* --- Télémesure paginée pendant la régulation (Btn_Menu = page suivante) --- */
+  /* --- Télémesure paginée pendant la régulation (Btn_Menu = page suivante,
+   * UP/DOWN = T_cible) --- */
   if (page_affichage == 0) {
     fmt1(a, sizeof(a), T_sec); fmt1(b, sizeof(b), Config.T_cible);
     snprintf(lignes[0], T, "%s %s Fl:%d", nomSource(Source_Active), nomPalierOuPhase(), Flame ? 1 : 0);
-    snprintf(lignes[1], T, "T%sC>%sC", a, b);
+    snprintf(lignes[1], T, "T%sC>%sC %s", a, b, regime_chaud ? "CHAUD" : "FROID");
     fmt1(a, sizeof(a), H_sec); fmt1(b, sizeof(b), H_fin);
     snprintf(lignes[2], T, "Hs%s%% Hf%s%%", a, b);
-    fmt1(a, sizeof(a), Press_H2);
-    snprintf(lignes[3], T, "EV%d%d%d H2:%sb", EV1 ? 1 : 0, EV2 ? 1 : 0, EV3 ? 1 : 0, a);
+    if (etat_courant == ETAT_PROLONGATION) {
+      snprintf(lignes[3], T, "Prolong %lu/%lu min",
+               (unsigned long)((t_boucle - chrono_prolongation) / 60000UL),
+               (unsigned long)duree_prolongation_min);
+    } else {
+      fmt1(a, sizeof(a), Press_H2);
+      snprintf(lignes[3], T, "EV%d%d%d H2:%sb", EV1 ? 1 : 0, EV2 ? 1 : 0, EV3 ? 1 : 0, a);
+    }
   } else {
     fmt1(a, sizeof(a), T_amb); fmt1(b, sizeof(b), H_amb);
     snprintf(lignes[0], T, "Am%sC Ha%s%%", a, b);
-    fmt1(a, sizeof(a), Config.H_initial); fmt1(b, sizeof(b), Config.H_produit_cible);
-    snprintf(lignes[1], T, "Hi%s%% Ho%s%%", a, b);
+    fmt1(a, sizeof(a), T_cap); fmt1(b, sizeof(b), seuilSolaireOn());
+    snprintf(lignes[1], T, "Tcap%sC ON%sC", a, b);
     snprintf(lignes[2], T, "%s t=%lum", Config.Mode_Auto ? "AUTO" : "MANUEL",
              (unsigned long)((t_boucle - chrono_cycle) / 60000UL));
-    snprintf(lignes[3], T, "Max%lum Pro%lum",
-             (unsigned long)Config.Duree_Max_Cycle, (unsigned long)Config.Temps_Prolongation);
+    if (Config.Fixe_T_amb || Config.Fixe_H_amb || Config.Fixe_H_sec || Config.Fixe_Press) {
+      snprintf(lignes[3], T, "FIXE:%s%s%s%s",
+               Config.Fixe_T_amb ? "Ta " : "", Config.Fixe_H_amb ? "Ha " : "",
+               Config.Fixe_H_sec ? "Hs " : "", Config.Fixe_Press ? "P" : "");
+    } else if (!Config.Regul_Auto) {
+      snprintf(lignes[3], T, "PALIER IMPOSE %s", nomPalier(Config.Palier_Impose));
+    } else {
+      snprintf(lignes[3], T, "Max%lum Te%lus",
+               (unsigned long)Config.Duree_Max_Cycle, (unsigned long)Config.Periode_Regul);
+    }
   }
 }
 

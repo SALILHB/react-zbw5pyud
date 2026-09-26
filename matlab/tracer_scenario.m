@@ -102,6 +102,7 @@ function fig = tracer_scenario(r)
 
     linkaxes([a1 a2 a3 a4], 'x');
     xlim(a1, [t(1) t(end)]);
+    drawnow;   % rendu terminé avant l'export (affichage asynchrone des figures)
 end
 
 function v = valeurSignal(m, t)

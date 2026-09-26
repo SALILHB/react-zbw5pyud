@@ -36,6 +36,7 @@ function comparer_scenario(n)
     xlabel('Temps (min)');
     grid on;
     linkaxes([a1 a2], 'x');
+    drawnow;
 
     fichier = fullfile(dossier, 'captures', sprintf('comparaison_%02d.png', n));
     if ~isempty(which('exportgraphics'))

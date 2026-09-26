@@ -11,7 +11,11 @@ function r = charger_reference(n)
 
     dossier = fileparts(mfilename('fullpath'));
     fichier = fullfile(dossier, 'reference', sprintf('scenario_%02d.csv', n));
-    M = dlmread(fichier, ',', 1, 0);
+    if exist('OCTAVE_VERSION', 'builtin')
+        M = dlmread(fichier, ',', 1, 0);
+    else
+        M = readmatrix(fichier, 'NumHeaderLines', 1);   % MATLAB R2019a+
+    end
     % colonnes : t,T_sec,H_sec,P_gaz,Flame,V_Fl_1,V_Fl_2,V_Fl_3,V_H2,V_But,Etat
     % Le fichier ne contient qu'un point toutes les 10 s et à chaque
     % changement : rééchantillonnage à 0,5 s (valeur maintenue pour les

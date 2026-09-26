@@ -17,7 +17,9 @@ function fig = tracer_scenario(r)
     Hp = valeurSignal(sc.signaux.H_produit, r.t);
     PNOM = 5000;
 
-    fig = figure('Color', 'w', 'Position', [80 40 1000 980], ...
+    % Fenêtre séparée : dans le bureau MATLAB R2025, une figure ancrée ignore
+    % Position, et l'image exportée n'aurait pas la bonne taille.
+    fig = figure('Color', 'w', 'WindowStyle', 'normal', 'Position', [80 40 1000 980], ...
                  'Name', sprintf('Scenario %d', sc.num));
 
     % --- 1. Températures

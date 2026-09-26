@@ -3,9 +3,10 @@
 Ce guide mène de l'ouverture de MATLAB aux figures du mémoire. Il y a
 **4 commandes** à taper, toutes dans le dossier `matlab/`.
 
-> Pré-requis : MATLAB **R2020a ou plus récent**, avec **Simulink** et
-> **Stateflow** (inclus dans les licences étudiantes et universitaires
-> habituelles). Récupérer le dossier `matlab/` complet de la branche.
+> Version cible : **MATLAB R2025b**, avec **Simulink** et **Stateflow**
+> (le modèle `.slx` fourni a été enregistré avec R2025b). Vérifier les
+> produits installés avec la commande `ver` : les lignes *Simulink* et
+> *Stateflow* doivent apparaître. Récupérer le dossier `matlab/` complet.
 
 ---
 
@@ -147,25 +148,36 @@ L'état actif surligné n'existe que pendant la simulation. Pour le figer :
 1. `open_system('Simulation_Sechoir_Hybride')`, puis
    `appliquer_scenario('Simulation_Sechoir_Hybride', scenario_sechoir(7))`
    (charge le scénario et règle le *Stop Time*, sans lancer la simulation).
-2. Onglet *Simulation* → menu sous *Step Back* → **Configure Simulation
-   Stepping** → cocher *Pause simulation when time reaches* → `1600`.
-3. Ouvrir le chart (double-clic sur `FSM`, puis sur `Chart`), cliquer
-   **Run** : la simulation s'arrête à 1600 s, `URGENCE_ATEX` surligné.
-4. Capture : `Win + Maj + S` (Windows). Si l'option de pause n'apparaît pas
-   dans votre version, réglez l'animation sur *Slow* (onglet *Debug* →
-   *Animation Speed*) et cliquez **Pause** au bon moment.
+2. Ouvrir le chart (double-clic sur `FSM`, puis sur `Chart`). Dans l'onglet
+   *Simulation*, choisir la vitesse d'animation **Slow** ou **Medium**
+   (menu *Animation Speed* / *Debug*, selon l'agencement de la barre
+   d'outils de R2025b).
+3. **Méthode la plus sûre — point d'arrêt sur l'état** : clic droit sur l'état
+   à montrer (par exemple `URGENCE_ATEX`) → *Add Breakpoint* / *Set
+   Breakpoint on Entry*. Cliquer **Run** : la simulation s'arrête à l'entrée
+   dans l'état, qui est surligné. Faire la capture, puis **Stop** (et retirer
+   le point d'arrêt : clic droit → *Clear Breakpoint*).
+4. Autre méthode, pour une date précise : dans le *Stop Time* de la barre
+   d'outils, mettre l'instant voulu (par exemple `1600`) et cliquer **Run** ;
+   ou lancer la simulation en animation lente et cliquer **Pause** au bon
+   moment.
+5. Capture : `Win + Maj + S` (Windows).
+
+Les noms exacts des menus peuvent différer légèrement dans R2025b : si un
+menu n'est pas trouvé, décrivez-moi ce que vous voyez (ou envoyez une capture
+de la barre d'outils) et je vous indique le bon chemin.
 
 Instants intéressants :
 
-| Capture | Scénario | Pause à |
+| Capture | Scénario | Point d'arrêt sur l'état / pause à |
 |---|---|---|
-| Combustion H2, régulation | 1 | 400 s |
-| Purge de bascule vers GPL | 3 | 1300 s |
-| MODE_SOLAIRE | 2 | 600 s |
-| ERREUR_COMBUSTION | 5 | 500 s |
-| URGENCE_ATEX | 7 | 1600 s |
-| DEMANDE_PROLONGATION (régions parallèles actives) | 9 | 7250 s |
-| PROLONGATION | 9 | 8000 s |
+| Combustion H2, régulation | 1 | `REGULATION` (dans `MODE_H2`) / 400 s |
+| Purge de bascule vers GPL | 3 | `PURGE` (dans `MODE_GPL`) / 1300 s |
+| MODE_SOLAIRE | 2 | `MODE_SOLAIRE` / 600 s |
+| ERREUR_COMBUSTION | 5 | `ERREUR_COMBUSTION` / 500 s |
+| URGENCE_ATEX | 7 | `URGENCE_ATEX` / 1600 s |
+| DEMANDE_PROLONGATION (régions parallèles actives) | 9 | `DEMANDE_PROLONGATION` / 7250 s |
+| PROLONGATION | 9 | `PROLONGATION` / 8000 s |
 
 Autres captures utiles : le **Scope SUIVI** (double-clic) après une
 simulation, et le **Model Explorer** (Ctrl+H) sur le chart pour la liste des

@@ -3,6 +3,8 @@
 Modèle Simulink de la commande, dont le chart Stateflow `FSM` reproduit la
 logique du firmware Arduino `sechoir_hybride/` (v3), qui fait foi.
 
+Version cible : **MATLAB R2025b** (Simulink + Stateflow).
+
 **Pour simuler : suivre [`GUIDE_SIMULATION.md`](GUIDE_SIMULATION.md)**
 (4 commandes : `preparer_simulation`, `lancer_simulation(1:12)`,
 `comparer_scenario(n)`, `capturer_modele`).

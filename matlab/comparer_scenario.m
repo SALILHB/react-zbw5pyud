@@ -14,7 +14,9 @@ function comparer_scenario(n)
     s = donnees.r;
     f = charger_reference(n);
 
-    fig = figure('Color', 'w', 'Position', [80 80 1000 650], ...
+    % Fenêtre séparée : dans le bureau MATLAB R2025, une figure ancrée ignore
+    % Position, et l'image exportée n'aurait pas la bonne taille.
+    fig = figure('Color', 'w', 'WindowStyle', 'normal', 'Position', [80 80 1000 650], ...
                  'Name', sprintf('Comparaison scenario %d', n));
     a1 = subplot(2, 1, 1);
     plot(s.t / 60, s.T_sec, 'LineWidth', 1.8, 'Color', [0.17 0.42 0.69]);

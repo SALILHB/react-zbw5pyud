@@ -260,7 +260,49 @@ figurer :
    sous R2025b.
 9. **Tableau de validation croisée** (§3.8) et conclusion du chapitre.
 
-## 5. Forme attendue
+## 5. Style d'écriture : celui d'un étudiant de master, pas un texte « générique »
+
+Le texte doit ressembler à un mémoire écrit par l'étudiant lui-même : un
+travail sérieux, personnel et concret. Pas une brochure.
+
+- **Ton** : sobre et direct, avec le « nous » habituel des mémoires. Explique
+  comme un étudiant qui a fait le travail : « nous avons choisi… parce
+  que… », « lors du premier essai, nous avons constaté que… ».
+- **Phrases** : longueurs variées, vocabulaire technique juste, sans
+  emphase. Évite les formules toutes faites (« Il est important de
+  noter que », « Dans un monde où », « En somme », « joue un rôle crucial »,
+  « robuste et innovant », « de manière significative »), les énumérations
+  systématiques par trois et les conclusions répétées à chaque section.
+- **Paragraphes plutôt que listes** : utilise des listes à puces seulement
+  pour de vraies énumérations (paramètres, étapes). Le raisonnement et les
+  justifications s'écrivent en paragraphes.
+- **Vécu du projet** : appuie-toi sur les difficultés réellement
+  rencontrées pendant le travail. Ce sont elles qui rendent le texte
+  crédible et personnel :
+  - le modèle `.slx` de départ avait des ports non câblés et aucune
+    transition par défaut. Nous avons donc décidé de reconstruire le modèle
+    entièrement par script ;
+  - sous R2025b, trois règles Stateflow ont bloqué la compilation et nous
+    ont obligés à revoir l'écriture du chart :
+    1. un chart doit avoir une transition par défaut ;
+    2. pas de `if` dans une action de transition ;
+    3. `duration()` ne lit qu'une seule donnée locale ;
+  - la première figure était blanche : trop de points pour le rendu
+    graphique WebGL de la carte Intel HD 630. Nous avons dû alléger le
+    tracé ;
+  - l'écart d'environ 4 s par cycle de veille s'explique par la lecture de
+    la sonde toutes les secondes dans le firmware ;
+  - la simulation de référence a révélé le défaut de bascule pendant la
+    veille, que nous avons corrigé.
+- **Honnêteté scientifique** : présente les limites sans les minimiser
+  (modèle d'humidité illustratif, paramètres non identifiés), et n'exagère
+  aucun résultat.
+- Termine ta réponse par un court rappel : l'étudiant doit **relire,
+  vérifier et reformuler le texte avec ses propres mots** avant de
+  l'intégrer. L'usage de l'IA reste déclaré dans le chapitre « Logiciels et
+  outils utilisés », selon la politique de l'établissement.
+
+## 6. Forme attendue
 
 - **Français académique**, avec « nous », des phrases claires et aucune
   exagération.

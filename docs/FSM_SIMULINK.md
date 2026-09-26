@@ -140,29 +140,6 @@ certaines durées en minutes : multiplier par 60.
 
 ## 3. Actions des états (langage d'action MATLAB)
 
-> **Fonctions du chart** (depuis la version lisible) : le code des actions est
-> regroupé dans 23 fonctions MATLAB du chart, à l'image des fonctions du
-> firmware ; les états et les transitions n'appellent que ces fonctions. Les
-> textes détaillés ci-dessous restent la référence du contenu de chaque
-> fonction.
->
-> | Fonction du chart | Fonction du firmware | Rôle |
-> |---|---|---|
-> | `acquerir()` | `lireEntrees()` | grandeurs FIXE/AUTO, T_cap estimée, H_fin, repère FROID/CHAUD, `gaz_ferme` |
-> | `fermer_gaz()` | `fermerGaz()` | vannes source, électrovannes de rampe, étincelle |
-> | `ventiler(purge, distrib, extract)` | sorties PWM | consignes des ventilateurs |
-> | `demarrer_cycle()`, `calculer_seuils()` | `demarrerCycle()`, `calculerSeuils()` | T_init, T1/T2/T3, compteurs, palier de mise en route |
-> | `entrer_combustion(source)` | `palierInitial()` | palier de départ en venant du solaire |
-> | `purger()`, `allumer(source)`, `ouvrir_source(source)`, `reguler(t)` | `gererCombustion()`, `majPalier()`, `appliquerPalier()` | purge, allumage, régulation par paliers |
-> | `etape_solaire(duree)` | `etapeSolaire()` | gaz fermé, post-purge |
-> | `entrer_erreur()`, `choisir_erreur()` | `entrerErreurCombustion()` | alarme, choix RÉESSAYER / MANUEL / AUTOMATIQUE |
-> | `entrer_urgence()`, `rearmer()`, `rearmement_possible()`, `fuite_ou_AU()` | `declencherUrgence()`, `causeGazOuAU()` | urgence et réarmement |
-> | `memoriser_boutons()`, `surveiller_humidite()`, `humidite_atteinte()` | `conditionHumidite()` | demande de prolongation |
-> | `solaire_on()`, `solaire_maintien()`, `solaire_depart()` | `seuilSolaireOn/Off()`, `seuilMaintienSolaire()` | arbitrage solaire |
->
-> Règles : `temporalCount(sec)` et `in(...)` ne s'utilisent pas dans une
-> fonction ; ils restent dans l'état ou sont passés en argument.
-
 Blocs réutilisés :
 
 - **`fermer_gaz`** : `V_H2=uint8(0); V_But=uint8(0); V_Fl_1=uint8(0); V_Fl_2=uint8(0); V_Fl_3=uint8(0); Spark=uint8(0);`

@@ -345,8 +345,9 @@ Voir **`matlab/GUIDE_SIMULATION.md`**. En bref, dans MATLAB R2025b, dossier
   (après correction de trois règles Stateflow : transition par défaut, aucun
   `if` dans une action de transition, `duration()` limité à une donnée).
 
-**Reste à vérifier** : la simulation des scénarios et leur comparaison avec
-la référence du firmware (`matlab/reference/`).
+- **Les 12 scénarios simulés sous R2025b concordent avec le firmware**
+  (`comparer_scenario`) : mêmes changements d'état, écart ≤ 0,1 s (0,6 s pour
+  la surchauffe du scénario 12).
 
 ---
 

@@ -420,8 +420,13 @@ function ecrireActionsEtats(h)
         'if post_purge==1, PWM_Purge=uint8(255); PWM_Inj=uint8(60); PWM_Ext=uint8(200);\n' ...
         'else, PWM_Purge=uint8(0); PWM_Inj=uint8(220); PWM_Ext=uint8(150); end'], fg)});
 
-    ecrireLabel(h.h2,  {'entry: Source_Active=uint8(1);'});
-    ecrireLabel(h.gpl, {'entry: Source_Active=uint8(2);'});
+    % MODE_H2 / MODE_GPL : en venant du solaire (Source_Active == 0), palier
+    % de mise en route (palierInitial() du firmware). Ce calcul contient des
+    % IF : il ne peut pas être dans l'action de la transition (règle
+    % Stateflow), il est donc fait à l'entrée de l'état. Au démarrage du
+    % cycle, il redonne le même résultat que l'entrée de EN_CYCLE.
+    ecrireLabel(h.h2,  {sprintf('entry:\nif Source_Active==0\n  %s\nend\nSource_Active=uint8(1);', txtPalierInitial())});
+    ecrireLabel(h.gpl, {sprintf('entry:\nif Source_Active==0\n  %s\nend\nSource_Active=uint8(2);', txtPalierInitial())});
 
     ecrireLabel(h.err, {sprintf([ ...
         'entry: %s Buzzer=uint8(1); PWM_Purge=uint8(255); PWM_Inj=uint8(0); PWM_Ext=uint8(200);\n' ...
@@ -572,7 +577,7 @@ function ajouterTransitions(chart, h)
     transition(chart, h.h2,  h.sol, retourSol);
     transition(chart, h.gpl, h.sol, retourSol);
     versComb = ['Mode_Auto_Eff==1 && ~' txtCondSolaireMaintien()];
-    actComb  = ['{post_purge=uint8(0); nb_echecs_allumage=uint16(0); ' txtPalierInitial() '}'];
+    actComb  = '{post_purge=uint8(0); nb_echecs_allumage=uint16(0);}';   % palier : entrée de MODE_H2 / MODE_GPL
     transition(chart, h.sol, h.h2,  ['[' versComb ' && Press_e >= Press_H2_Min]' actComb]);
     transition(chart, h.sol, h.gpl, ['[' versComb ' && Press_e < Press_H2_Min]' actComb]);
     transition(chart, h.h2,  h.gpl, '[Mode_Auto_Eff==1 && Press_e < Press_H2_Min]{raison_purge=uint8(2); nb_echecs_allumage=uint16(0);}');
@@ -583,9 +588,13 @@ function ajouterTransitions(chart, h)
     ajouterTransitionsCombustion(chart, h, h.sm_gpl);
 
     % --- ERREUR_COMBUSTION : reprise au palier mémorisé après purge.
-    reprise = '{if Choix_Erreur==2, Mode_Auto_Eff=uint8(1); end; nb_echecs_allumage=uint16(0); raison_purge=uint8(1); Buzzer=uint8(0);}';
-    transition(chart, h.err, h.h2,  ['[Btn_OK==1 && (Choix_Erreur==0 || Choix_Erreur==2) && Source_Active==1]' reprise]);
-    transition(chart, h.err, h.gpl, ['[Btn_OK==1 && (Choix_Erreur==0 || Choix_Erreur==2) && Source_Active==2]' reprise]);
+    %     Pas de IF dans une action de transition (règle Stateflow) : une
+    %     transition par choix (0 = RÉESSAYER, 2 = AUTOMATIQUE).
+    reprise = 'nb_echecs_allumage=uint16(0); raison_purge=uint8(1); Buzzer=uint8(0);';
+    transition(chart, h.err, h.h2,  ['[Btn_OK==1 && Choix_Erreur==0 && Source_Active==1]{' reprise '}']);
+    transition(chart, h.err, h.h2,  ['[Btn_OK==1 && Choix_Erreur==2 && Source_Active==1]{Mode_Auto_Eff=uint8(1); ' reprise '}']);
+    transition(chart, h.err, h.gpl, ['[Btn_OK==1 && Choix_Erreur==0 && Source_Active==2]{' reprise '}']);
+    transition(chart, h.err, h.gpl, ['[Btn_OK==1 && Choix_Erreur==2 && Source_Active==2]{Mode_Auto_Eff=uint8(1); ' reprise '}']);
     transition(chart, h.err, h.att, '[Btn_OK==1 && Choix_Erreur==1]{Mode_Auto_Eff=uint8(0); Buzzer=uint8(0);}');
     transition(chart, h.err, h.ter, '[Btn_Stop==1]{Buzzer=uint8(0);}');
 
@@ -613,11 +622,13 @@ end
 function ajouterTransitionsCombustion(chart, h, sm)
     % gererCombustion() du firmware. Ordre de création = priorité : le
     % contrôle de flamme passe avant la coupure volontaire au palier 0 %.
-    % Veille à 0 % (raison 3 OU palier 3, p. ex. bascule pendant la veille) :
-    % rallumage seulement quand la demande revient, au palier 33 %.
+    % Fin de purge. Veille à 0 % (raison 3 OU palier 3, p. ex. bascule
+    % pendant la veille) : rallumage seulement quand la demande revient, au
+    % palier 33 %. Deux transitions (pas de IF dans une action de transition).
     transition(chart, sm.purge, sm.allumage, ...
-        ['[after(Temps_Purge, sec) && ((raison_purge ~= 3 && palier ~= 3) || T_sec < T3_seuil - Hhyst/2)]' ...
-         '{if raison_purge==3 || palier==3, palier=uint8(2); end}']);
+        '[after(Temps_Purge, sec) && raison_purge ~= 3 && palier ~= 3]');
+    transition(chart, sm.purge, sm.allumage, ...
+        '[after(Temps_Purge, sec) && (raison_purge == 3 || palier == 3) && T_sec < T3_seuil - Hhyst/2]{palier=uint8(2);}');
     transition(chart, sm.allumage, sm.regulation, '[Flame==1]{Spark=uint8(0); nb_echecs_allumage=uint16(0);}');
     transition(chart, sm.allumage, sm.purge, ...
         '[after(Temps_Allumage, sec) && Flame==0 && nb_echecs_allumage + 1 < MAX_ECHECS]{nb_echecs_allumage=nb_echecs_allumage+1; raison_purge=uint8(1);}');

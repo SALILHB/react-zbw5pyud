@@ -258,6 +258,15 @@ coupure volontaire n'est jamais prise pour une panne.
 
 ## 5. Règles Stateflow à connaître (pour modifier le chart à la main)
 
+> **Règle Stateflow** (erreur rencontrée sous R2025b) : une action de
+> transition `{...}` ne peut contenir **aucun** `if`, `switch`, `for` ni
+> `while`. Les décisions sont donc soit dans la condition `[...]` (une
+> transition par cas), soit dans l'action `entry` de l'état d'arrivée. C'est
+> le cas du palier de mise en route (entrée de `MODE_H2` / `MODE_GPL` quand on
+> vient du solaire), de la reprise après `ERREUR_COMBUSTION` (une transition
+> par choix) et de la fin de purge (une transition normale, une pour la veille
+> à 0 %).
+
 - **Priorité** : à chaque pas, Stateflow évalue d'abord les transitions qui
   **sortent** de l'état parent, puis celles de ses enfants. L'urgence (bord de
   `FONCTIONNEMENT_NORMAL`) passe donc avant tout le reste, puis Stop et

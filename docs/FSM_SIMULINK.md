@@ -341,8 +341,11 @@ Voir **`matlab/GUIDE_SIMULATION.md`**. En bref, dans MATLAB R2025b, dossier
   La compilation a échoué uniquement sur l'absence de transition par défaut
   du chart d'origine — cause supprimée par la construction à partir de zéro.
 
-**Reste à vérifier** : la compilation du modèle construit par
-`construire_modele`, puis la simulation des scénarios et leur comparaison avec
+- **`construire_modele` sous MATLAB R2025b : le modèle compile sans erreur**
+  (après correction de trois règles Stateflow : transition par défaut, aucun
+  `if` dans une action de transition, `duration()` limité à une donnée).
+
+**Reste à vérifier** : la simulation des scénarios et leur comparaison avec
 la référence du firmware (`matlab/reference/`).
 
 ---

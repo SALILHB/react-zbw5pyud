@@ -653,7 +653,7 @@ add(H1("14. Modèle Simulink / Stateflow et guide de simulation"),
     "`Etat_LCD` (codes du tableau 12.3) pour suivre les états.",
     "`cause_urgence`, `nb_echecs_allumage`, `nb_pertes_flamme` pour les scénarios de défaut.",
   ]),
-  NOTE("Important", "Les scripts ont été vérifiés par analyse statique (chapitre 15). Les premiers essais sous MATLAB R2025b ont validé la création des données, de la hiérarchie et des transitions ; la compilation et la simulation du modèle construit à partir de zéro sont à confirmer lors du premier essai complet."),
+  NOTE("Important", "Les scripts ont été vérifiés par analyse statique (chapitre 15). Les premiers essais sous MATLAB R2025b ont validé la création des données, de la hiérarchie et des transitions ; le modèle construit à partir de zéro **compile sans erreur** ; la simulation des scénarios est à confirmer."),
 );
 
 /* ======================================================================

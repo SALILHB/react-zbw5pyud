@@ -38,7 +38,8 @@ function fig = tracer_scenario(r)
             for k = 1:2
                 Tk = Tinit + k * (Tcib - Tinit) / 3;
                 plot([t(1) t(end)], [Tk Tk], ':', 'Color', [0.6 0.6 0.6]);
-                text(t(end), Tk, sprintf(' T%d', k), 'FontSize', 8, 'Color', [0.45 0.45 0.45]);
+                text(t(1) + 0.01 * (t(end) - t(1)), Tk, sprintf('T%d', k), 'FontSize', 8, ...
+                     'Color', [0.45 0.45 0.45], 'VerticalAlignment', 'bottom');
             end
         end
     end
@@ -53,7 +54,7 @@ function fig = tracer_scenario(r)
         titre = [titre ' (' r.source ')'];
     end
     title(lat(titre));
-    legend(legendes, 'Location', 'best');
+    legend(legendes, 'Location', 'eastoutside');
     grid on;
 
     % --- 2. Puissance et source
@@ -71,7 +72,7 @@ function fig = tracer_scenario(r)
     ylim([0 115]);
     set(gca, 'YTick', [0 33 67 100]);
     ylabel('Puissance (% Pnom)');
-    legend({'palier de gaz', 'vanne H_2', 'vanne GPL', 'flamme (0/15)'}, 'Location', 'best');
+    legend({'palier de gaz', 'vanne H_2', 'vanne GPL', 'flamme (0/15)'}, 'Location', 'eastoutside');
     grid on;
 
     % --- 3. États
@@ -98,11 +99,12 @@ function fig = tracer_scenario(r)
     end
     ylabel(lat(['Humidit' char(233) ' (% HR)']));
     xlabel('Temps (min)');
-    legend(legendes, 'Location', 'best');
+    legend(legendes, 'Location', 'eastoutside');
     grid on;
 
     linkaxes([a1 a2 a3 a4], 'x');
     xlim(a1, [t(1) t(end)]);
+    alignerAxes([a1 a2 a3 a4]);   % légendes à droite : mêmes largeurs d'axes
     drawnow;   % rendu terminé avant l'export (affichage asynchrone des figures)
 end
 
@@ -128,5 +130,21 @@ function s = lat(s)
     % quel dans MATLAB ; converti en UTF-8 pour Octave.
     if exist('OCTAVE_VERSION', 'builtin')
         s = native2unicode(uint8(s), 'latin1');
+    end
+end
+
+function alignerAxes(axes_liste)
+    % Les légendes placées à droite des axes (hors du tracé, pour ne cacher
+    % aucune donnée) réduisent la largeur de certains axes seulement : on
+    % donne à tous la largeur du plus étroit, pour aligner l'axe du temps.
+    drawnow;
+    pos = get(axes_liste, 'Position');
+    if iscell(pos)
+        pos = vertcat(pos{:});
+    end
+    largeur = min(pos(:, 3));
+    for i = 1:numel(axes_liste)
+        p = pos(i, :);
+        set(axes_liste(i), 'Position', [p(1) p(2) largeur p(4)]);
     end
 end

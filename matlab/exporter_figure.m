@@ -16,7 +16,11 @@ function exporter_figure(fig, fichier)
     end
     drawnow;
     if ~isempty(which('exportgraphics'))
-        exportgraphics(fig, fichier, 'Resolution', 300);
+        try   % marge autour de la figure : titre non rogné
+            exportgraphics(fig, fichier, 'Resolution', 300, 'Padding', 20);
+        catch
+            exportgraphics(fig, fichier, 'Resolution', 300);
+        end
     else
         print(fig, fichier, '-dpng', '-r300');
     end

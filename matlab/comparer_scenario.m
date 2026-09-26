@@ -24,7 +24,7 @@ function comparer_scenario(n)
     plot(f.t / 60, f.T_sec, '--', 'LineWidth', 1.4, 'Color', [0.75 0.34 0.13]);
     ylabel(lat(['T_{sec} (' char(176) 'C)']));
     title(lat(sprintf('Sc%snario %d : %s - Simulink / firmware', char(233), n, s.sc.nom)));
-    legend({'Simulink (Stateflow)', 'Firmware Arduino'}, 'Location', 'best');
+    legend({'Simulink (Stateflow)', 'Firmware Arduino'}, 'Location', 'eastoutside');
     grid on;
     a2 = subplot(2, 1, 2);
     stairs(s.t / 60, s.fsm.Etat_LCD, 'LineWidth', 1.8, 'Color', [0.17 0.42 0.69]);
@@ -36,6 +36,7 @@ function comparer_scenario(n)
     xlabel('Temps (min)');
     grid on;
     linkaxes([a1 a2], 'x');
+    alignerAxes([a1 a2]);
     drawnow;
 
     fichier = fullfile(dossier, 'captures', sprintf('comparaison_%02d.png', n));
@@ -79,5 +80,21 @@ function s = lat(s)
     % quel dans MATLAB ; converti en UTF-8 pour Octave.
     if exist('OCTAVE_VERSION', 'builtin')
         s = native2unicode(uint8(s), 'latin1');
+    end
+end
+
+function alignerAxes(axes_liste)
+    % Les légendes placées à droite des axes (hors du tracé, pour ne cacher
+    % aucune donnée) réduisent la largeur de certains axes seulement : on
+    % donne à tous la largeur du plus étroit, pour aligner l'axe du temps.
+    drawnow;
+    pos = get(axes_liste, 'Position');
+    if iscell(pos)
+        pos = vertcat(pos{:});
+    end
+    largeur = min(pos(:, 3));
+    for i = 1:numel(axes_liste)
+        p = pos(i, :);
+        set(axes_liste(i), 'Position', [p(1) p(2) largeur p(4)]);
     end
 end

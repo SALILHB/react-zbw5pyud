@@ -266,6 +266,10 @@ coupure volontaire n'est jamais prise pour une panne.
 > vient du solaire), de la reprise après `ERREUR_COMBUSTION` (une transition
 > par choix) et de la fin de purge (une transition normale, une pour la veille
 > à 0 %).
+>
+> **Opérateur `duration(...)`** : il ne peut lire qu'**une seule** donnée
+> locale ou de sortie. La flamme parasite utilise donc `gaz_ferme`
+> (= `V_H2==0 && V_But==0`, calculée par `FONCTIONNEMENT_NORMAL`).
 
 - **Priorité** : à chaque pas, Stateflow évalue d'abord les transitions qui
   **sortent** de l'état parent, puis celles de ses enfants. L'urgence (bord de

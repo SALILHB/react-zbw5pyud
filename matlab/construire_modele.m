@@ -200,6 +200,7 @@ function creerDonnees(chart)
         'Btn_DOWN_prev',       'Local', 'uint8',  0
         'cause_urgence',       'Local', 'uint8',  0       % 1=H2,2=GPL,3=AU,4=perte,5=parasite
         'post_purge',          'Local', 'uint8',  0
+        'gaz_ferme',           'Local', 'uint8',  1       % 1 si V_H2 et V_But sont fermées
         't_cycle',             'Local', 'double', 0       % s depuis Btn_Start
         't_derniere_regul',    'Local', 'double', 0
         'motif_demande',       'Local', 'uint8',  0       % 0=humidite,1=duree max,2=fin prolong.
@@ -376,7 +377,8 @@ function ecrireActionsEtats(h)
         'H_fin = min(H_produit + H_amb_e, 95);\n' ...
         'if regime_chaud==0 && T_sec >= Seuil_Chaud + Hhyst/2, regime_chaud=uint8(1);\n' ...
         'elseif regime_chaud==1 && T_sec < Seuil_Chaud - Hhyst/2, regime_chaud=uint8(0); end\n' ...
-        'if Mode_Auto ~= Mode_Auto_prev, Mode_Auto_Eff=Mode_Auto; Mode_Auto_prev=Mode_Auto; end'])});
+        'if Mode_Auto ~= Mode_Auto_prev, Mode_Auto_Eff=Mode_Auto; Mode_Auto_prev=Mode_Auto; end\n' ...
+        'gaz_ferme = uint8(V_H2==0 && V_But==0);'])});
 
     ecrireLabel(h.att, {['entry: ' fg ' PWM_Purge=uint8(0); PWM_Inj=uint8(0); PWM_Ext=uint8(0); Buzzer=uint8(0); Etat_LCD=uint8(0);']});
 
@@ -544,8 +546,11 @@ function ajouterTransitions(chart, h)
     %     transition la plus externe, créée en premier).
     transition(chart, h.fn, h.urg, '[MQ8_H2 >= Seuil_MQ8 || MQ6_But >= Seuil_MQ6 || AU_Manuel == 1]');
     % --- 1b. URGENCE : flamme vue alors que le gaz est commandé fermé.
+    %     duration() ne peut lire qu'UNE donnée locale ou de sortie : l'état
+    %     des deux vannes est résumé dans gaz_ferme (action de
+    %     FONCTIONNEMENT_NORMAL, un pas de retard sur 5 s : négligeable).
     transition(chart, h.fn, h.urg, sprintf( ...
-        '[duration(Flame==1 && V_H2==0 && V_But==0) >= DELAI_FLAMME_PARASITE]{cause_urgence=uint8(5);}'));
+        '[duration(Flame==1 && gaz_ferme==1) >= DELAI_FLAMME_PARASITE]{cause_urgence=uint8(5);}'));
 
     % --- Réarmement : seulement si aucune cause présente (flamme comprise).
     %     Retour à ATTENTE_DEMARRAGE : le cycle n'est jamais repris.
@@ -558,7 +563,9 @@ function ajouterTransitions(chart, h)
     transition(chart, h.en, h.ter, ['[T_sec >= T_SEC_MAX_SECURITE && ~' ERR ']{' fg '}']);
 
     % --- Fin du refroidissement / relance depuis SECHAGE_TERMINE.
-    transition(chart, h.ter, h.att, '[after(300, sec) || Btn_Start==1]');
+    %     (deux transitions : un opérateur temporel est gardé seul avec ||)
+    transition(chart, h.ter, h.att, '[after(300, sec)]');
+    transition(chart, h.ter, h.att, '[Btn_Start==1]');
 
     % --- Démarrage automatique (demarrerCycle) : FROID -> seuil ON seul,
     %     CHAUD (T_sec >= Seuil_Chaud) -> solaire accepté dès OFF.

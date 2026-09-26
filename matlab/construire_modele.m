@@ -62,6 +62,7 @@ function construire_modele(nom)
 
     creerDonnees(chart);
     h = creerEtats(chart);
+    creerFonctions(chart);
     ecrireActionsEtats(h);
     ajouterTransitions(chart, h);
 
@@ -361,115 +362,7 @@ function ecrireLabel(s, lignes)
     s.LabelString = strjoin([{nomEtat(s)}, lignes], sprintf('\n'));
 end
 
-function ecrireActionsEtats(h)
-    fprintf('--- Actions des etats ---\n');
-    fg = txtFermerGaz();
 
-    % FONCTIONNEMENT_NORMAL : acquisition (lireEntrees() du firmware) —
-    % grandeurs FIXE/AUTO, T_cap estimée, H_fin, repère FROID/CHAUD,
-    % resynchronisation du mode auto quand l'opérateur change le sélecteur.
-    ecrireLabel(h.fn, {sprintf([ ...
-        'entry, during:\n' ...
-        'if Fixe_T_amb==1, T_amb_e=Val_T_amb; else, T_amb_e=T_amb; end\n' ...
-        'if Fixe_H_amb==1, H_amb_e=Val_H_amb; else, H_amb_e=H_amb; end\n' ...
-        'if Fixe_H_sec==1, H_sec_e=Val_H_sec; else, H_sec_e=H_sec; end\n' ...
-        'if Fixe_Press==1, Press_e=Val_Press; else, Press_e=Press_H2; end\n' ...
-        'T_cap_est = T_amb_e + DeltaT_Sol;\n' ...
-        'H_fin = min(H_produit + H_amb_e, 95);\n' ...
-        'if regime_chaud==0 && T_sec >= Seuil_Chaud + Hhyst/2, regime_chaud=uint8(1);\n' ...
-        'elseif regime_chaud==1 && T_sec < Seuil_Chaud - Hhyst/2, regime_chaud=uint8(0); end\n' ...
-        'if Mode_Auto ~= Mode_Auto_prev, Mode_Auto_Eff=Mode_Auto; Mode_Auto_prev=Mode_Auto; end\n' ...
-        'gaz_ferme = uint8(V_H2==0 && V_But==0);'])});
-
-    ecrireLabel(h.att, {['entry: ' fg ' PWM_Purge=uint8(0); PWM_Inj=uint8(0); PWM_Ext=uint8(0); Buzzer=uint8(0); Etat_LCD=uint8(0);']});
-
-    ecrireLabel(h.ter, {['entry: ' fg ' PWM_Purge=uint8(0); PWM_Inj=uint8(0); PWM_Ext=uint8(90); Buzzer=uint8(0); Etat_LCD=uint8(7);']});
-
-    ecrireLabel(h.urg, { ...
-        ['entry: ' fg ' PWM_Purge=uint8(255); PWM_Inj=uint8(0); PWM_Ext=uint8(255); Buzzer=uint8(1); Etat_LCD=uint8(9);'], ...
-        ['if cause_urgence==0, if AU_Manuel==1, cause_urgence=uint8(3); ' ...
-         'elseif MQ8_H2 >= Seuil_MQ8, cause_urgence=uint8(1); else, cause_urgence=uint8(2); end; end'], ...
-        ['during: ' fg]});
-
-    % EN_CYCLE : demarrerCycle() du firmware (une seule fois par cycle).
-    ecrireLabel(h.en, {sprintf([ ...
-        'entry:\n' ...
-        'if Mode_Auto_Eff==1, T_init=T_sec; else, T_init=T_init_manuel; end\n' ...
-        '%s\n' ...
-        'regime_chaud = uint8(T_sec >= Seuil_Chaud);\n' ...
-        'nb_echecs_allumage=uint16(0); nb_pertes_flamme=uint8(0);\n' ...
-        'humidite_deja_atteinte=uint8(0); post_purge=uint8(0); t_cycle=0;\n' ...
-        '%s\n' ...
-        'during:\n' ...
-        't_cycle = temporalCount(sec);\n' ...
-        '%s\n' ...
-        'if in(SOURCE.ERREUR_COMBUSTION), Etat_LCD=uint8(8);\n' ...
-        'elseif in(PHASE.DEMANDE_PROLONGATION), Etat_LCD=uint8(5);\n' ...
-        'elseif in(PHASE.PROLONGATION), Etat_LCD=uint8(6);\n' ...
-        'elseif in(SOURCE.MODE_H2), Etat_LCD=uint8(3);\n' ...
-        'elseif in(SOURCE.MODE_GPL), Etat_LCD=uint8(4);\n' ...
-        'else, Etat_LCD=uint8(2); end'], ...
-        txtCalculerSeuils(), txtPalierInitial(), txtCalculerSeuils())});
-
-    ecrireLabel(h.src, {});
-    ecrireLabel(h.pha, {});
-    ecrireLabel(h.nor, {});
-
-    % MODE_SOLAIRE : etapeSolaire() — post-purge après extinction du brûleur.
-    ecrireLabel(h.sol, {sprintf([ ...
-        'entry, during:\n' ...
-        '%s Source_Active=uint8(0);\n' ...
-        'if post_purge==1 && temporalCount(sec) >= Temps_Purge, post_purge=uint8(0); end\n' ...
-        'if post_purge==1, PWM_Purge=uint8(255); PWM_Inj=uint8(60); PWM_Ext=uint8(200);\n' ...
-        'else, PWM_Purge=uint8(0); PWM_Inj=uint8(220); PWM_Ext=uint8(150); end'], fg)});
-
-    % MODE_H2 / MODE_GPL : en venant du solaire (Source_Active == 0), palier
-    % de mise en route (palierInitial() du firmware). Ce calcul contient des
-    % IF : il ne peut pas être dans l'action de la transition (règle
-    % Stateflow), il est donc fait à l'entrée de l'état. Au démarrage du
-    % cycle, il redonne le même résultat que l'entrée de EN_CYCLE.
-    ecrireLabel(h.h2,  {sprintf('entry:\nif Source_Active==0\n  %s\nend\nSource_Active=uint8(1);', txtPalierInitial())});
-    ecrireLabel(h.gpl, {sprintf('entry:\nif Source_Active==0\n  %s\nend\nSource_Active=uint8(2);', txtPalierInitial())});
-
-    ecrireLabel(h.err, {sprintf([ ...
-        'entry: %s Buzzer=uint8(1); PWM_Purge=uint8(255); PWM_Inj=uint8(0); PWM_Ext=uint8(200);\n' ...
-        'Choix_Erreur=uint8(0); Btn_SELECT_prev=Btn_SELECT;\n' ...
-        'during:\n' ...
-        'if Btn_SELECT==1 && Btn_SELECT_prev==0, Choix_Erreur=uint8(mod(double(Choix_Erreur)+1, 3)); end\n' ...
-        'Btn_SELECT_prev=Btn_SELECT;'], fg)});
-
-    ecrireLabel(h.dem, {sprintf([ ...
-        'entry: Btn_UP_prev=Btn_UP; Btn_DOWN_prev=Btn_DOWN;\n' ...
-        'during:\n' ...
-        'if humidite_deja_atteinte==0 && %s, humidite_deja_atteinte=uint8(1); motif_demande=uint8(0); end\n' ...
-        'Btn_UP_prev=Btn_UP; Btn_DOWN_prev=Btn_DOWN;'], txtCondHumidite())});
-
-    ecrireLabel(h.pro, {});
-
-    ecrireSousMachine(h.sm_h2,  'V_H2=uint8(1); V_But=uint8(0);');
-    ecrireSousMachine(h.sm_gpl, 'V_H2=uint8(0); V_But=uint8(1);');
-    fprintf('  [ok] libelles ecrits\n');
-end
-
-function ecrireSousMachine(sm, actionVanne)
-    fg = txtFermerGaz();
-    ecrireLabel(sm.purge, {['entry: ' fg ' PWM_Purge=uint8(255); PWM_Inj=uint8(60); PWM_Ext=uint8(200);']});
-    ecrireLabel(sm.allumage, {['entry: ' actionVanne ' ' txtAppliquerPalier() ' Spark=uint8(1); ' txtVentilPalier()]});
-    % REGULATION : palier imposé, ou comparaison T_sec / seuils toutes les
-    % Periode_Regul secondes. Le gaz n'est JAMAIS fermé ici au palier 0 % :
-    % c'est la transition [palier==3] qui le fait, APRÈS le contrôle de
-    % flamme (sinon l'extinction volontaire serait prise pour une panne).
-    ecrireLabel(sm.regulation, {sprintf([ ...
-        'entry: %s t_derniere_regul=0;\n' ...
-        'during:\n' ...
-        'if Regul_Auto==0\n' ...
-        '  palier=Palier_Impose;\n' ...
-        'elseif temporalCount(sec) - t_derniere_regul >= Periode_Regul\n' ...
-        '  t_derniere_regul = temporalCount(sec);\n' ...
-        '%s\n' ...
-        'end\n' ...
-        'if palier ~= 3\n  %s\n  %s\nend'], actionVanne, txtGererPalier(), txtAppliquerPalier(), txtVentilPalier())});
-end
 
 function t = transition(chart, src, dst, label)
     % Crée une transition dans le plus petit ancêtre commun de src et dst
@@ -582,75 +475,182 @@ function o = objetParChemin(chart, chemin)
     o = chart;   % repli : Stateflow reclasse la transition
 end
 
+
+
+function creerFonctions(chart)
+    % Fonctions MATLAB du chart, à l'image des fonctions du firmware
+    % (lireEntrees, fermerGaz, appliquerPalier, gererCombustion...). Elles
+    % lisent et écrivent directement les données du chart ; les états et les
+    % transitions ne portent plus que des appels courts : chart lisible.
+    % Règles Stateflow : pas de temporalCount ni de in() dans une fonction
+    % (passés en argument ou gardés dans l'état).
+    fg = txtFermerGaz();
+    F = {
+      'acquerir()', 'lireEntrees() : grandeurs FIXE/AUTO, T_cap estimee, H_fin, repere FROID/CHAUD', ...
+        sprintf(['if Fixe_T_amb==1, T_amb_e=Val_T_amb; else, T_amb_e=T_amb; end\n' ...
+        'if Fixe_H_amb==1, H_amb_e=Val_H_amb; else, H_amb_e=H_amb; end\n' ...
+        'if Fixe_H_sec==1, H_sec_e=Val_H_sec; else, H_sec_e=H_sec; end\n' ...
+        'if Fixe_Press==1, Press_e=Val_Press; else, Press_e=Press_H2; end\n' ...
+        'T_cap_est = T_amb_e + DeltaT_Sol;\n' ...
+        'H_fin = min(H_produit + H_amb_e, 95);\n' ...
+        'if regime_chaud==0 && T_sec >= Seuil_Chaud + Hhyst/2, regime_chaud=uint8(1);\n' ...
+        'elseif regime_chaud==1 && T_sec < Seuil_Chaud - Hhyst/2, regime_chaud=uint8(0); end\n' ...
+        'if Mode_Auto ~= Mode_Auto_prev, Mode_Auto_Eff=Mode_Auto; Mode_Auto_prev=Mode_Auto; end\n' ...
+        'gaz_ferme = uint8(V_H2==0 && V_But==0);'])
+      'fermer_gaz()', 'fermerGaz() : vannes source, electrovannes de rampe et etincelle', strrep(fg, '; ', sprintf(';\n'))
+      'ventiler(pwm_purge, pwm_distrib, pwm_extract)', 'consignes des ventilateurs (0 a 255)', ...
+        'PWM_Purge=uint8(pwm_purge); PWM_Inj=uint8(pwm_distrib); PWM_Ext=uint8(pwm_extract);'
+      'calculer_seuils()', 'seuils T1, T2, T3 a partir de T_init et T_cible', txtCalculerSeuils()
+      'demarrer_cycle()', 'demarrerCycle() : T_init, seuils, repere, compteurs, palier de mise en route', ...
+        sprintf(['if Mode_Auto_Eff==1, T_init=T_sec; else, T_init=T_init_manuel; end\n%s\n' ...
+        'regime_chaud = uint8(T_sec >= Seuil_Chaud);\n' ...
+        'nb_echecs_allumage=uint16(0); nb_pertes_flamme=uint8(0);\n' ...
+        'humidite_deja_atteinte=uint8(0); post_purge=uint8(0); t_cycle=0;\n%s'], ...
+        txtCalculerSeuils(), txtPalierInitial())
+      'entrer_urgence()', 'declencherUrgence() : tout fermer, ventilation maximale, alarme, cause', ...
+        sprintf(['%s\nPWM_Purge=uint8(255); PWM_Inj=uint8(0); PWM_Ext=uint8(255); Buzzer=uint8(1); Etat_LCD=uint8(9);\n' ...
+        'if cause_urgence==0\n  if AU_Manuel==1, cause_urgence=uint8(3);\n' ...
+        '  elseif MQ8_H2 >= Seuil_MQ8, cause_urgence=uint8(1); else, cause_urgence=uint8(2); end\nend'], fg)
+      'rearmer()', 'rearmement : alarme coupee, compteurs remis a zero', ...
+        'Buzzer=uint8(0); palier=uint8(0); raison_purge=uint8(0); cause_urgence=uint8(0);'
+      'etape_solaire(duree)', 'etapeSolaire() : gaz ferme, post-purge apres extinction du bruleur', ...
+        sprintf(['%s\nSource_Active=uint8(0);\n' ...
+        'if post_purge==1 && duree >= Temps_Purge, post_purge=uint8(0); end\n' ...
+        'if post_purge==1, PWM_Purge=uint8(255); PWM_Inj=uint8(60); PWM_Ext=uint8(200);\n' ...
+        'else, PWM_Purge=uint8(0); PWM_Inj=uint8(220); PWM_Ext=uint8(150); end'], fg)
+      'entrer_combustion(source)', 'palier de mise en route en venant du solaire (palierInitial)', ...
+        sprintf('if Source_Active==0\n  %s\nend\nSource_Active=uint8(source);', txtPalierInitial())
+      'entrer_erreur()', 'entrerErreurCombustion() : gaz ferme, alarme, choix REESSAYER par defaut', ...
+        sprintf('%s\nBuzzer=uint8(1); PWM_Purge=uint8(255); PWM_Inj=uint8(0); PWM_Ext=uint8(200);\nChoix_Erreur=uint8(0); Btn_SELECT_prev=Btn_SELECT;', fg)
+      'choisir_erreur()', 'bouton MENU : REESSAYER / MANUEL / AUTOMATIQUE', ...
+        sprintf('if Btn_SELECT==1 && Btn_SELECT_prev==0, Choix_Erreur=uint8(mod(double(Choix_Erreur)+1, 3)); end\nBtn_SELECT_prev=Btn_SELECT;')
+      'purger()', 'PH_PURGE : gaz ferme, balayage maximal', ...
+        sprintf('%s\nPWM_Purge=uint8(255); PWM_Inj=uint8(60); PWM_Ext=uint8(200);', fg)
+      'allumer(source)', 'PH_ALLUMAGE : vanne source, electrovannes du palier, etincelle', ...
+        sprintf('V_H2=uint8(source==1); V_But=uint8(source==2);\n%s\nSpark=uint8(1);\n%s', txtAppliquerPalier(), txtVentilPalier())
+      'ouvrir_source(source)', 'vanne source de la combustion en cours', ...
+        'V_H2=uint8(source==1); V_But=uint8(source==2);'
+      'reguler(t)', 'regulation par paliers toutes les Periode_Regul s (majPalier + appliquerPalier)', ...
+        sprintf(['if Regul_Auto==0\n  palier=Palier_Impose;\n' ...
+        'elseif t - t_derniere_regul >= Periode_Regul\n  t_derniere_regul = t;\n%s\nend\n' ...
+        'if palier ~= 3\n  %s\n  %s\nend'], txtGererPalier(), txtAppliquerPalier(), txtVentilPalier())
+      'memoriser_boutons()', 'fronts des boutons UP / DOWN', 'Btn_UP_prev=Btn_UP; Btn_DOWN_prev=Btn_DOWN;'
+      'surveiller_humidite()', 'humidite atteinte pendant la question : motif memorise', ...
+        sprintf('if humidite_deja_atteinte==0 && %s\n  humidite_deja_atteinte=uint8(1); motif_demande=uint8(0);\nend', txtCondHumidite())
+      'ok = fuite_ou_AU()', 'causeGazOuAU() : fuite H2, fuite GPL ou arret d''urgence', ...
+        'ok = MQ8_H2 >= Seuil_MQ8 || MQ6_But >= Seuil_MQ6 || AU_Manuel == 1;'
+      'ok = rearmement_possible()', 'aucune cause d''urgence presente (flamme comprise)', ...
+        'ok = MQ8_H2 < Seuil_MQ8 && MQ6_But < Seuil_MQ6 && AU_Manuel == 0 && Flame == 0;'
+      'ok = humidite_atteinte()', 'conditionHumidite()', ['ok = ' txtCondHumidite() ';']
+      'ok = solaire_on()', 'seuil solaire ON', ['ok = ' txtCondSolaireOn() ';']
+      'ok = solaire_maintien()', 'seuilMaintienSolaire() : ON en regime FROID, OFF en regime CHAUD', ...
+        ['ok = ' txtCondSolaireMaintien() ';']
+      'ok = solaire_depart()', 'demarrage : CHAUD -> solaire des OFF, FROID -> seuil ON', ...
+        ['ok = (T_sec >= Seuil_Chaud && T_cap_est >= T_cible + Marge_Sol - Hyst_Sol) || ' txtCondSolaireOn() ';']
+    };
+    typesArguments = {'pwm_purge', 'double'; 'pwm_distrib', 'double'; 'pwm_extract', 'double'; 'duree', 'double'; ...
+                      'source', 'double'; 't', 'double'; 'ok', 'boolean'};
+    for k = 1:size(F, 1)
+        f = Stateflow.EMFunction(chart);
+        f.Position = [1240, 20 + 45 * (k - 1), 230, 36];
+        f.Script = sprintf('function %s\n%% %s\n%s\n', F{k, 1}, F{k, 2}, F{k, 3});
+        for a = 1:size(typesArguments, 1)
+            d = f.find('-isa', 'Stateflow.Data', 'Name', typesArguments{a, 1});
+            if ~isempty(d)
+                d(1).DataType = typesArguments{a, 2};
+            end
+        end
+    end
+    fprintf('  [ok] %d fonctions MATLAB du chart creees\n', size(F, 1));
+end
+
+function ecrireActionsEtats(h)
+    fprintf('--- Actions des etats ---\n');
+    ecrireLabel(h.fn,  {'entry, during: acquerir();'});
+    ecrireLabel(h.att, {'entry: fermer_gaz(); ventiler(0, 0, 0); Buzzer=uint8(0); Etat_LCD=uint8(0);'});
+    ecrireLabel(h.ter, {'entry: fermer_gaz(); ventiler(0, 0, 90); Buzzer=uint8(0); Etat_LCD=uint8(7);'});
+    ecrireLabel(h.urg, {'entry: entrer_urgence();', 'during: fermer_gaz();'});
+    ecrireLabel(h.en, {sprintf([ ...
+        'entry: demarrer_cycle();\n' ...
+        'during:\n' ...
+        't_cycle = temporalCount(sec);\n' ...
+        'calculer_seuils();\n' ...
+        'if in(SOURCE.ERREUR_COMBUSTION), Etat_LCD=uint8(8);\n' ...
+        'elseif in(PHASE.DEMANDE_PROLONGATION), Etat_LCD=uint8(5);\n' ...
+        'elseif in(PHASE.PROLONGATION), Etat_LCD=uint8(6);\n' ...
+        'elseif in(SOURCE.MODE_H2), Etat_LCD=uint8(3);\n' ...
+        'elseif in(SOURCE.MODE_GPL), Etat_LCD=uint8(4);\n' ...
+        'else, Etat_LCD=uint8(2); end'])});
+    ecrireLabel(h.src, {});
+    ecrireLabel(h.pha, {});
+    ecrireLabel(h.nor, {});
+    ecrireLabel(h.pro, {});
+    ecrireLabel(h.sol, {'entry, during: etape_solaire(temporalCount(sec));'});
+    ecrireLabel(h.h2,  {'entry: entrer_combustion(1);'});
+    ecrireLabel(h.gpl, {'entry: entrer_combustion(2);'});
+    ecrireLabel(h.err, {'entry: entrer_erreur();', 'during: choisir_erreur();'});
+    ecrireLabel(h.dem, {'entry: memoriser_boutons();', 'during: surveiller_humidite(); memoriser_boutons();'});
+    ecrireSousMachine(h.sm_h2, 1);
+    ecrireSousMachine(h.sm_gpl, 2);
+    fprintf('  [ok] libelles ecrits\n');
+end
+
+function ecrireSousMachine(sm, source)
+    ecrireLabel(sm.purge,      {'entry: purger();'});
+    ecrireLabel(sm.allumage,   {sprintf('entry: allumer(%d);', source)});
+    ecrireLabel(sm.regulation, {sprintf('entry: ouvrir_source(%d); t_derniere_regul=0;', source), ...
+                                'during: reguler(temporalCount(sec));'});
+end
+
 function ajouterTransitions(chart, h)
     fprintf('--- Transitions ---\n');
-    fg = txtFermerGaz();
     ERR = 'in(EN_CYCLE.SOURCE.ERREUR_COMBUSTION)';
     n0 = numel(chart.find('-isa', 'Stateflow.Transition'));
 
-    % --- Transitions par défaut (une par état OR ayant des sous-états).
-    transition(chart, [], h.fn, '');                        % chart
-    transition(chart, [], h.att, '');                       % FONCTIONNEMENT_NORMAL
-    transition(chart, [], h.sol, '');                       % SOURCE (sécurité : pas de gaz)
-    transition(chart, [], h.nor, '');                       % PHASE
+    % --- Transitions par défaut
+    transition(chart, [], h.fn, '');
+    transition(chart, [], h.att, '');
+    transition(chart, [], h.sol, '');               % sécurité : jamais de gaz par défaut
+    transition(chart, [], h.nor, '');
     transition(chart, [], h.sm_h2.purge, '');
     transition(chart, [], h.sm_gpl.purge, '');
 
-    % --- 1a. URGENCE : fuite H2 / GPL ou arrêt d'urgence (priorité maximale :
-    %     transition la plus externe, créée en premier).
-    transition(chart, h.fn, h.urg, '[MQ8_H2 >= Seuil_MQ8 || MQ6_But >= Seuil_MQ6 || AU_Manuel == 1]');
-    % --- 1b. URGENCE : flamme vue alors que le gaz est commandé fermé.
-    %     duration() ne peut lire qu'UNE donnée locale ou de sortie : l'état
-    %     des deux vannes est résumé dans gaz_ferme (action de
-    %     FONCTIONNEMENT_NORMAL, un pas de retard sur 5 s : négligeable).
-    transition(chart, h.fn, h.urg, sprintf( ...
-        '[duration(Flame==1 && gaz_ferme==1) >= DELAI_FLAMME_PARASITE]{cause_urgence=uint8(5);}'));
+    % --- 1. URGENCE (transitions les plus externes : priorité maximale)
+    transition(chart, h.fn, h.urg, '[fuite_ou_AU()]');
+    %     duration() ne lit qu'une donnée locale : gaz_ferme (calculée par acquerir)
+    transition(chart, h.fn, h.urg, '[duration(Flame==1 && gaz_ferme==1) >= DELAI_FLAMME_PARASITE]{cause_urgence=uint8(5);}');
+    transition(chart, h.urg, h.att, '[(Btn_OK==1 || Btn_Rearm==1) && rearmement_possible()]{rearmer();}');
 
-    % --- Réarmement : seulement si aucune cause présente (flamme comprise).
-    %     Retour à ATTENTE_DEMARRAGE : le cycle n'est jamais repris.
-    transition(chart, h.urg, h.att, ['[(Btn_OK==1 || Btn_Rearm==1) && MQ8_H2 < Seuil_MQ8 && ' ...
-        'MQ6_But < Seuil_MQ6 && AU_Manuel==0 && Flame==0]' ...
-        '{Buzzer=uint8(0); palier=uint8(0); raison_purge=uint8(0); cause_urgence=uint8(0);}']);
+    % --- 2. STOP et 3. surchauffe (tout le cycle)
+    transition(chart, h.en, h.ter, '[Btn_Stop==1]{fermer_gaz();}');
+    transition(chart, h.en, h.ter, ['[T_sec >= T_SEC_MAX_SECURITE && ~' ERR ']{fermer_gaz();}']);
 
-    % --- 2. Btn_Stop et 3. surchauffe (bord de EN_CYCLE : tout le cycle).
-    transition(chart, h.en, h.ter, ['[Btn_Stop==1]{' fg '}']);
-    transition(chart, h.en, h.ter, ['[T_sec >= T_SEC_MAX_SECURITE && ~' ERR ']{' fg '}']);
-
-    % --- Fin du refroidissement / relance depuis SECHAGE_TERMINE.
-    %     (deux transitions : un opérateur temporel est gardé seul avec ||)
+    % --- Fin du refroidissement (un opérateur temporel reste seul)
     transition(chart, h.ter, h.att, '[after(300, sec)]');
     transition(chart, h.ter, h.att, '[Btn_Start==1]');
 
-    % --- Démarrage automatique (demarrerCycle) : FROID -> seuil ON seul,
-    %     CHAUD (T_sec >= Seuil_Chaud) -> solaire accepté dès OFF.
-    condSol = ['((T_sec >= Seuil_Chaud && T_cap_est >= T_cible + Marge_Sol - Hyst_Sol) || ' ...
-               txtCondSolaireOn() ')'];
-    transition(chart, h.att, h.sol, ['[Btn_Start==1 && Mode_Auto_Eff==1 && ' condSol ']']);
-    transition(chart, h.att, h.h2,  ['[Btn_Start==1 && Mode_Auto_Eff==1 && ~' condSol ' && Press_e >= Press_H2_Min]']);
-    transition(chart, h.att, h.gpl, ['[Btn_Start==1 && Mode_Auto_Eff==1 && ~' condSol ' && Press_e < Press_H2_Min]']);
-    % Démarrage manuel : Choix_Manuel 1 = solaire, 2 = H2, 3 = GPL.
+    % --- Démarrage automatique puis manuel (1 solaire, 2 H2, 3 GPL)
+    transition(chart, h.att, h.sol, '[Btn_Start==1 && Mode_Auto_Eff==1 && solaire_depart()]');
+    transition(chart, h.att, h.h2,  '[Btn_Start==1 && Mode_Auto_Eff==1 && ~solaire_depart() && Press_e >= Press_H2_Min]');
+    transition(chart, h.att, h.gpl, '[Btn_Start==1 && Mode_Auto_Eff==1 && ~solaire_depart() && Press_e < Press_H2_Min]');
     transition(chart, h.att, h.sol, '[Btn_Start==1 && Mode_Auto_Eff==0 && Choix_Manuel==1]');
     transition(chart, h.att, h.h2,  '[Btn_Start==1 && Mode_Auto_Eff==0 && Choix_Manuel==2]');
     transition(chart, h.att, h.gpl, '[Btn_Start==1 && Mode_Auto_Eff==0 && Choix_Manuel==3]');
 
-    % --- Arbitrage de source (arbitrageSource), priorité 1 = retour solaire.
-    retourSol = ['[Mode_Auto_Eff==1 && ' txtCondSolaireOn() ']{' fg ' post_purge=uint8(1);}'];
-    transition(chart, h.h2,  h.sol, retourSol);
-    transition(chart, h.gpl, h.sol, retourSol);
-    versComb = ['Mode_Auto_Eff==1 && ~' txtCondSolaireMaintien()];
-    actComb  = '{post_purge=uint8(0); nb_echecs_allumage=uint16(0);}';   % palier : entrée de MODE_H2 / MODE_GPL
-    transition(chart, h.sol, h.h2,  ['[' versComb ' && Press_e >= Press_H2_Min]' actComb]);
-    transition(chart, h.sol, h.gpl, ['[' versComb ' && Press_e < Press_H2_Min]' actComb]);
+    % --- Arbitrage de source (priorité 1 : retour au solaire)
+    transition(chart, h.h2,  h.sol, '[Mode_Auto_Eff==1 && solaire_on()]{fermer_gaz(); post_purge=uint8(1);}');
+    transition(chart, h.gpl, h.sol, '[Mode_Auto_Eff==1 && solaire_on()]{fermer_gaz(); post_purge=uint8(1);}');
+    actComb = '{post_purge=uint8(0); nb_echecs_allumage=uint16(0);}';
+    transition(chart, h.sol, h.h2,  ['[Mode_Auto_Eff==1 && ~solaire_maintien() && Press_e >= Press_H2_Min]' actComb]);
+    transition(chart, h.sol, h.gpl, ['[Mode_Auto_Eff==1 && ~solaire_maintien() && Press_e < Press_H2_Min]' actComb]);
     transition(chart, h.h2,  h.gpl, '[Mode_Auto_Eff==1 && Press_e < Press_H2_Min]{raison_purge=uint8(2); nb_echecs_allumage=uint16(0);}');
     transition(chart, h.gpl, h.h2,  '[Mode_Auto_Eff==1 && Press_e >= Press_H2_Min + Marge_Retour_H2]{raison_purge=uint8(2); nb_echecs_allumage=uint16(0);}');
 
-    % --- Sous-machines de combustion.
+    % --- Combustion (identique pour H2 et GPL)
     ajouterTransitionsCombustion(chart, h, h.sm_h2);
     ajouterTransitionsCombustion(chart, h, h.sm_gpl);
 
-    % --- ERREUR_COMBUSTION : reprise au palier mémorisé après purge.
-    %     Pas de IF dans une action de transition (règle Stateflow) : une
-    %     transition par choix (0 = RÉESSAYER, 2 = AUTOMATIQUE).
+    % --- ERREUR_COMBUSTION : une transition par choix (pas de IF dans une action)
     reprise = 'nb_echecs_allumage=uint16(0); raison_purge=uint8(1); Buzzer=uint8(0);';
     transition(chart, h.err, h.h2,  ['[Btn_OK==1 && Choix_Erreur==0 && Source_Active==1]{' reprise '}']);
     transition(chart, h.err, h.h2,  ['[Btn_OK==1 && Choix_Erreur==2 && Source_Active==1]{Mode_Auto_Eff=uint8(1); ' reprise '}']);
@@ -659,21 +659,18 @@ function ajouterTransitions(chart, h)
     transition(chart, h.err, h.att, '[Btn_OK==1 && Choix_Erreur==1]{Mode_Auto_Eff=uint8(0); Buzzer=uint8(0);}');
     transition(chart, h.err, h.ter, '[Btn_Stop==1]{Buzzer=uint8(0);}');
 
-    % --- Région PHASE (fin de cycle, V3).
-    hum = txtCondHumidite();
-    % Une erreur de combustion ramène la phase à NORMAL (dans le firmware,
-    % REESSAYER/AUTOMATIQUE repassent par MODE_x) : créées EN PREMIER sur
-    % DEMANDE et PROLONGATION pour être prioritaires.
+    % --- Région PHASE (fin de cycle). Retour à NORMAL en cas d'erreur de
+    %     combustion : créées en premier pour être prioritaires.
     transition(chart, h.dem, h.nor, ['[' ERR ']']);
     transition(chart, h.pro, h.nor, ['[' ERR ']']);
-    transition(chart, h.nor, h.dem, ['[~' ERR ' && ' hum ']{motif_demande=uint8(0); humidite_deja_atteinte=uint8(1); duree_prolongation=Tps_Prolongation;}']);
+    transition(chart, h.nor, h.dem, ['[~' ERR ' && humidite_atteinte()]{motif_demande=uint8(0); humidite_deja_atteinte=uint8(1); duree_prolongation=Tps_Prolongation;}']);
     transition(chart, h.nor, h.dem, ['[~' ERR ' && t_cycle >= Duree_Max_Cycle]{motif_demande=uint8(1); duree_prolongation=Tps_Prolongation;}']);
     transition(chart, h.dem, h.pro, '[Btn_OK==1]');
-    transition(chart, h.dem, h.ter, ['[Btn_Stop==1]{' fg '}']);
-    transition(chart, h.dem, h.ter, ['[after(Temps_Reponse, sec)]{' fg '}']);
+    transition(chart, h.dem, h.ter, '[Btn_Stop==1]{fermer_gaz();}');
+    transition(chart, h.dem, h.ter, '[after(Temps_Reponse, sec)]{fermer_gaz();}');
     transition(chart, h.dem, h.dem, '[Btn_UP==1 && Btn_UP_prev==0]{duree_prolongation=min(duree_prolongation+300, 43200);}');
     transition(chart, h.dem, h.dem, '[Btn_DOWN==1 && Btn_DOWN_prev==0]{duree_prolongation=max(duree_prolongation-300, 300);}');
-    transition(chart, h.pro, h.dem, ['[humidite_deja_atteinte==0 && ' hum ']{motif_demande=uint8(0); humidite_deja_atteinte=uint8(1); duree_prolongation=Tps_Prolongation;}']);
+    transition(chart, h.pro, h.dem, '[humidite_deja_atteinte==0 && humidite_atteinte()]{motif_demande=uint8(0); humidite_deja_atteinte=uint8(1); duree_prolongation=Tps_Prolongation;}');
     transition(chart, h.pro, h.dem, '[after(duree_prolongation, sec)]{motif_demande=uint8(2); duree_prolongation=Tps_Prolongation;}');
 
     n1 = numel(chart.find('-isa', 'Stateflow.Transition'));
@@ -683,9 +680,8 @@ end
 function ajouterTransitionsCombustion(chart, h, sm)
     % gererCombustion() du firmware. Ordre de création = priorité : le
     % contrôle de flamme passe avant la coupure volontaire au palier 0 %.
-    % Fin de purge. Veille à 0 % (raison 3 OU palier 3, p. ex. bascule
-    % pendant la veille) : rallumage seulement quand la demande revient, au
-    % palier 33 %. Deux transitions (pas de IF dans une action de transition).
+    % Fin de purge : purge normale, ou veille à 0 % (rallumage à 33 % quand
+    % la demande revient) — deux transitions, pas de IF dans une action.
     transition(chart, sm.purge, sm.allumage, ...
         '[after(Temps_Purge, sec) && raison_purge ~= 3 && palier ~= 3]');
     transition(chart, sm.purge, sm.allumage, ...
@@ -696,7 +692,7 @@ function ajouterTransitionsCombustion(chart, h, sm)
     transition(chart, sm.allumage, h.err, ...
         '[after(Temps_Allumage, sec) && Flame==0 && nb_echecs_allumage + 1 >= MAX_ECHECS]{nb_echecs_allumage=nb_echecs_allumage+1;}');
     transition(chart, sm.regulation, sm.purge, ...
-        ['[Flame==0 && nb_pertes_flamme < MAX_PERTES_FLAMME]{' txtFermerGaz() ' nb_pertes_flamme=nb_pertes_flamme+1; raison_purge=uint8(1);}']);
+        '[Flame==0 && nb_pertes_flamme < MAX_PERTES_FLAMME]{fermer_gaz(); nb_pertes_flamme=nb_pertes_flamme+1; raison_purge=uint8(1);}');
     transition(chart, sm.regulation, h.urg, ...
         '[Flame==0 && nb_pertes_flamme >= MAX_PERTES_FLAMME]{cause_urgence=uint8(4);}');
     transition(chart, sm.regulation, sm.purge, '[palier==3]{raison_purge=uint8(3);}');

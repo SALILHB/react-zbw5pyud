@@ -5,7 +5,7 @@
 %   lancer_simulation(1:12)       tous
 %   r = lancer_simulation(5)      renvoie aussi les signaux
 %
-% Pré-requis : preparer_simulation() exécuté une fois (crée
+% Pré-requis : construire_modele() exécuté une fois (crée
 % Simulation_Sechoir_Hybride.slx). Pour chaque scénario :
 %   - affiche le journal des états et de la puissance (à me copier en cas de doute) ;
 %   - enregistre la figure  captures/scenario_NN.png  (300 dpi, pour le mémoire)

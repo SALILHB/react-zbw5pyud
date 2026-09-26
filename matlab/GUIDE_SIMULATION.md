@@ -3,8 +3,9 @@
 Ce guide mène de l'ouverture de MATLAB aux figures du mémoire. Il y a
 **4 commandes** à taper, toutes dans le dossier `matlab/`.
 
-> Version cible : **MATLAB R2025b**, avec **Simulink** et **Stateflow**
-> (le modèle `.slx` fourni a été enregistré avec R2025b). Vérifier les
+> Version cible : **MATLAB R2025b**, avec **Simulink** et **Stateflow**.
+> Le modèle est construit **entièrement par script, à partir de zéro** :
+> aucun fichier `.slx` existant n'est utilisé. Vérifier les
 > produits installés avec la commande `ver` : les lignes *Simulink* et
 > *Stateflow* doivent apparaître. Récupérer le dossier `matlab/` complet.
 
@@ -17,64 +18,61 @@ Dans MATLAB, *Current Folder* → aller dans `matlab/` (ou taper
 
 | Fichier | Rôle |
 |---|---|
-| `Commande_Sechoir_Hybride_corrige.slx` | modèle de départ (**jamais modifié**) |
-| `completer_fsm_sechoir.m` | écrit la logique du firmware dans le chart Stateflow |
-| `preparer_simulation.m` | construit le modèle de simulation complet |
+| `construire_modele.m` | construit le modèle complet à partir de zéro (chart Stateflow + modèle physique) |
 | `scenario_sechoir.m` | les 12 scénarios (boutons, consignes, défauts, paramètres) |
 | `lancer_simulation.m` | simule, affiche la chronologie, enregistre les figures |
 | `comparer_scenario.m` | compare Simulink à la référence du firmware |
 | `capturer_modele.m` | exporte les images du modèle et du chart |
 | `reference/scenario_NN.csv` | résultats attendus (firmware réel, même modèle physique) |
+| `ancien/` | première approche (compléter le `.slx` fourni), abandonnée : ne pas utiliser |
 
 ---
 
-## Étape 1 — Construire le modèle : `preparer_simulation`
+## Étape 1 — Construire le modèle : `construire_modele`
 
 ```matlab
-preparer_simulation
+construire_modele
 ```
 
-Le script crée `Simulation_Sechoir_Hybride.slx` et affiche une ligne `[ok]`
-par étape. Sortie attendue (abrégée) :
+Le script crée un modèle Simulink **neuf**, `Simulation_Sechoir_Hybride.slx`
+(un fichier précédent du même nom est remplacé), l'enregistre et l'ouvre.
+Sortie attendue :
 
 ```
-=== Preparation du modele de simulation : Simulation_Sechoir_Hybride ===
-  [ok] Commande_Sechoir_Hybride_corrige.slx copie en Simulation_Sechoir_Hybride.slx
-=== Completion du chart : Simulation_Sechoir_Hybride/FSM/Chart ===
-  ...
-  [ok] hierarchie conforme
+=== Construction du modele Simulation_Sechoir_Hybride (a partir de zero) ===
+  [ok] modele vide cree
+  [ok] chart cree (langage MATLAB, periode 0.1 s)
+  [ok] 89 donnees : 21 entrees, 11 sorties, 57 parametres et variables
+  [ok] 20 etats crees (EN_CYCLE : PARALLEL_AND)
+--- Actions des etats ---
   [ok] libelles ecrits
+--- Transitions ---
   [ok] NN transitions creees
-  [ok] chart execute toutes les 0.1 s
-  [ok] anciens ports et constantes supprimes
-  [ok] 24 entrees du chart cablees (T_sec, H_sec, Flame, T_amb via ports, le reste via From Workspace)
-  [ok] 11 sorties du chart reliees aux ports du sous-systeme FSM
-  [ok] modele physique, bruleur, sechage, enregistrement et Scope ajoutes
+  [ok] chart cable : 21 entrees (T_sec, H_sec, Flame, T_amb via ports, le reste via From Workspace), 11 sorties
+  [ok] modele physique : puissance, thermique, sechage, bruleur, Scope, enregistrement
   [ok] solveur ode4, pas fixe 0.1 s
   [ok] le modele compile sans erreur
 === Simulation_Sechoir_Hybride.slx enregistre. Etape suivante : lancer_simulation(1) ===
 ```
 
-**Pourquoi ce câblage ?** Dans le modèle fourni, les ports du sous-système
-`FSM` n'étaient reliés ni au chart ni aux sorties : le chart ne recevait rien
-et aucune vanne ne pouvait s'ouvrir. Le script relie les 24 entrées du chart
-et ajoute ce qui manquait pour boucler la simulation :
+Contenu du modèle :
 
-| Bloc ajouté | Rôle |
+| Bloc | Rôle |
 |---|---|
-| `BRULEUR` | flamme = vanne de gaz ouverte (au pas précédent), sauf panne simulée |
-| `MODELE_SECHAGE` + intégrateur `H_sec` | humidité de l'air extrait (modèle illustratif) |
+| `FSM` → `Chart` | chart Stateflow : logique du firmware v3 (hiérarchie, actions, transitions de `docs/FSM_SIMULINK.md`) |
+| `FSM` → `sc_*` (From Workspace) | boutons, consignes, capteurs et défauts du scénario |
+| `CONVERSION_PUISSANCE` | électrovannes de rampe → puissance de gaz (Pnom = 5000 W) |
 | `sc_P_sol` + `Puissance_totale` | apport du capteur solaire, ajouté à la puissance du gaz |
-| `sc_*` (From Workspace) | boutons, consignes, capteurs et défauts du scénario |
+| `MODELE_THERMIQUE` | τ dT_sec/dt = Kth·P + T_amb − T_sec (Kth = 0,098 K/W ; τ = 3530 s) |
+| `MODELE_SECHAGE` + intégrateur `H_sec` | humidité de l'air extrait (modèle illustratif) |
+| `BRULEUR` | capteur de flamme : flamme si une vanne de gaz est ouverte (au pas précédent), sauf panne simulée |
 | `SUIVI` (Scope) | T_sec, H_sec et état en direct |
 | `log_*` (To Workspace) | enregistrement pour les figures |
 
-**Si une ligne affiche `[ERREUR]` ou `[HIERARCHIE INCORRECTE]`** : copiez-moi
-toute la sortie (et le message du *Diagnostic Viewer* s'il s'ouvre).
-En cas de `[HIERARCHIE INCORRECTE]` : ouvrir `Simulation_Sechoir_Hybride`,
-glisser-déposer les états signalés dans leur boîte parente, régler `EN_CYCLE`
-en *Decomposition → AND (parallel)*, enregistrer, puis
-`preparer_simulation('Simulation_Sechoir_Hybride', 'Simulation_Sechoir_Hybride')`.
+**Si une ligne affiche `[ERREUR]`** : copiez-moi toute la sortie. En cas
+d'erreur de compilation, la liste des causes (contenu du *Diagnostic
+Viewer*) est affichée juste en dessous. Le script se relance tel quel : il
+reconstruit tout.
 
 ---
 

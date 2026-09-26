@@ -137,15 +137,12 @@ function sc = scenarioParDefaut()
     s.Btn_DOWN = cst(0);
     s.Btn_SELECT = cst(0);
     s.Btn_Rearm = cst(0);
-    s.Btn_Prolongation = cst(0);     % entrée d'origine, inutilisée en v3
     % --- Consignes opérateur
     s.Mode_Auto = cst(1);
     s.Choix_Manuel = cst(2);         % utilisé seulement si Mode_Auto = 0
     s.T_cible = cst(55);             % °C
     s.H_produit = cst(10);           % H_fin = min(H_produit + H_amb, 95)
     s.Tps_Prolongation = cst(1800);  % s
-    s.H_initial = cst(90);           % entrée d'origine, inutilisée en v3
-    s.T_cap = cst(0);                % entrée d'origine, remplacée par T_cap_est
     % --- Capteurs et environnement
     s.T_amb = cst(25);               % °C
     s.H_amb = cst(35);               % % HR

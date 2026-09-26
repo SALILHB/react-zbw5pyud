@@ -1,17 +1,18 @@
 # Séchoir solaire hybride — Modèle Simulink/Stateflow de la commande (v3)
 
-Spécification de la partie **FSM** du modèle `Commande_Sechoir_Hybride.slx`
-(sous-système « FSM », chart Stateflow, données, transitions), construite par
-`matlab/completer_fsm_sechoir.m`. Elle reproduit **exactement** le firmware
+Spécification du chart Stateflow du modèle `Simulation_Sechoir_Hybride.slx`
+(sous-système « FSM » : chart, données, transitions), **construit entièrement
+à partir de zéro** par `matlab/construire_modele.m`. Il reproduit **exactement** le firmware
 Arduino `sechoir_hybride/sechoir_hybride.ino` v3, qui est la source de vérité
 (voir `docs/FSM_SECHOIR.md` §0 pour les décisions de la v3).
 
-Les sous-systèmes `CONVERSION_PUISSANCE` et `MODELE_THERMIQUE` ne sont pas
-modifiés (§9).
+Le même script construit le modèle physique en boucle fermée (§9). La
+première approche, qui complétait le `.slx` fourni au départ, est abandonnée
+(fichiers dans `matlab/ancien/`) ; le §0 garde l'historique de ses erreurs.
 
 ---
 
-## 0. Corrections par rapport à la version précédente du script
+## 0. Historique : erreurs de l'approche abandonnée (compléter le `.slx` fourni)
 
 La version précédente (commit `bacc6c0`) n'a jamais été exécutée ; une
 relecture complète du `.slx` d'origine a montré qu'elle **n'aurait pas
@@ -36,32 +37,31 @@ fonctionné**. Ne l'utilisez pas. Erreurs corrigées :
 
 ```
 FSM/Chart
-├── FONCTIONNEMENT_NORMAL (OR)            [20 20 1040 920]
+├── FONCTIONNEMENT_NORMAL (OR)            [20 20 1180 1000]
 │   entry, during : acquisition (grandeurs FIXE/AUTO, T_cap_est, H_fin,
 │                   repère FROID/CHAUD, synchro Mode_Auto)
-│   ├── ATTENTE_DEMARRAGE                 [60 60 180 80]
-│   ├── EN_CYCLE (AND — deux régions parallèles)   [40 170 1000 750]
+│   ├── ATTENTE_DEMARRAGE  (défaut)       [60 70 220 70]
+│   ├── EN_CYCLE (AND — deux régions parallèles)   [40 180 1140 820]
 │   │   entry : demarrerCycle()     during : t_cycle, seuils, Etat_LCD
-│   │   ├── SOURCE (région 1)             [60 200 640 700]
-│   │   │   ├── MODE_SOLAIRE              [80 240 200 90]
-│   │   │   ├── ERREUR_COMBUSTION         [320 240 360 90]
-│   │   │   ├── MODE_H2                   [80 360 600 250]
-│   │   │   │   ├── PURGE → ALLUMAGE → REGULATION
-│   │   │   └── MODE_GPL                  [80 630 600 250]
-│   │   │       ├── PURGE → ALLUMAGE → REGULATION
-│   │   └── PHASE (région 2)              [720 200 300 700]
-│   │       ├── NORMAL                    [740 240 260 80]
-│   │       ├── DEMANDE_PROLONGATION      [740 360 260 250]  (ex-FIN_TEMPORISATION)
-│   │       └── PROLONGATION              [740 630 260 250]
-│   └── SECHAGE_TERMINE                   [860 60 180 80]
-└── URGENCE_ATEX                          [20 980 320 150]
+│   │   ├── SOURCE (région 1)             [60 220 720 760]
+│   │   │   ├── MODE_SOLAIRE  (défaut)    [90 270 220 110]
+│   │   │   ├── ERREUR_COMBUSTION         [340 270 420 110]
+│   │   │   ├── MODE_H2                   [90 410 670 260]
+│   │   │   │   ├── PURGE (défaut) → ALLUMAGE → REGULATION
+│   │   │   └── MODE_GPL                  [90 690 670 260]
+│   │   │       ├── PURGE (défaut) → ALLUMAGE → REGULATION
+│   │   └── PHASE (région 2)              [800 220 360 760]
+│   │       ├── NORMAL  (défaut)          [830 270 300 90]
+│   │       ├── DEMANDE_PROLONGATION      [830 410 300 260]
+│   │       └── PROLONGATION              [830 690 300 260]
+│   └── SECHAGE_TERMINE                   [940 70 220 70]
+└── URGENCE_ATEX                          [20 1060 420 170]
+(défaut du chart : FONCTIONNEMENT_NORMAL)
 ```
 
-Positions `[x y largeur hauteur]` en coordonnées du chart. **Repli manuel** si
-le script affiche `[HIERARCHIE INCORRECTE]` : dans l'éditeur Stateflow, faites
-glisser chaque état signalé dans sa boîte parente, réglez `EN_CYCLE` en
-décomposition *AND (parallel)* (clic droit > Decomposition), puis relancez le
-script.
+Positions `[x y largeur hauteur]` en coordonnées du chart. Chaque état est
+créé directement dans son parent (`Stateflow.State(parent)`) : la hiérarchie
+ne dépend d'aucun déplacement graphique.
 
 Pourquoi deux régions parallèles : dans le firmware, `DEMANDE_PROLONGATION` et
 `PROLONGATION` appellent `etapeRegulation(false)` — la source et la combustion
@@ -78,19 +78,18 @@ certaines durées en minutes : multiplier par 60.
 
 ### 2.1 Entrées (`Input`)
 
-| Nom | Origine | Correspond à (firmware) |
+| Nom | Port | Correspond à (firmware) |
 |---|---|---|
-| `Btn_Start`, `Btn_OK`, `Btn_UP`, `Btn_DOWN` | modèle d'origine | boutons START, OK, UP, DOWN |
-| `Btn_SELECT` | modèle d'origine | bouton MENU (défilement des choix d'erreur) |
-| `Btn_Stop`, `Btn_Rearm` | **ajoutées** (2 ports à câbler) | boutons STOP et RÉARMEMENT |
-| `Mode_Auto`, `Choix_Manuel` | modèle d'origine | `Config.Mode_Auto`, `Config.Choix_Mode` |
-| `T_cible`, `H_produit` | modèle d'origine | `Config.T_cible`, `Config.H_produit_cible` |
-| `Tps_Prolongation` | modèle d'origine | `Config.Prolong_Defaut` — **en secondes** (1800 = 30 min) |
-| `T_sec`, `H_sec`, `T_amb`, `H_amb`, `Press_H2` | modèle d'origine | mesures |
-| `MQ8_H2`, `MQ6_But`, `Flame`, `AU_Manuel` | modèle d'origine | sécurité (`AU_Manuel` = `AU_Urgence`) |
-| `T_cap`, `Btn_Prolongation`, `H_initial` | modèle d'origine | **inutilisées** en v3 (`T_cap` remplacée par `T_cap_est`) |
+| `T_sec`, `H_sec`, `Flame`, `T_amb` | 1 à 4 (ports du sous-système FSM) | mesures, venant du modèle physique |
+| `Btn_Start`, `Btn_Stop`, `Btn_OK`, `Btn_UP`, `Btn_DOWN` | From Workspace | boutons START, STOP, OK, UP, DOWN |
+| `Btn_SELECT`, `Btn_Rearm` | From Workspace | bouton MENU (choix en erreur), RÉARMEMENT |
+| `Mode_Auto`, `Choix_Manuel` | From Workspace | `Config.Mode_Auto`, `Config.Choix_Mode` (1 solaire, 2 H2, 3 GPL) |
+| `T_cible`, `H_produit` | From Workspace | `Config.T_cible`, `Config.H_produit_cible` |
+| `Tps_Prolongation` | From Workspace | `Config.Prolong_Defaut` — **en secondes** (1800 = 30 min) |
+| `H_amb`, `Press_H2` | From Workspace | mesures |
+| `MQ8_H2`, `MQ6_But`, `AU_Manuel` | From Workspace | sécurité (`AU_Manuel` = `AU_Urgence`) |
 
-### 2.2 Sorties (`Output`, modèle d'origine)
+### 2.2 Sorties (`Output`)
 
 `V_H2`, `V_But`, `V_Fl_1..3` (= EV1..3), `Spark`, `PWM_Purge`, `PWM_Inj`
 (= `PWM_Distrib`), `PWM_Ext` (= `PWM_Extract`), `Buzzer`, `Etat_LCD`
@@ -102,8 +101,8 @@ certaines durées en minutes : multiplier par 60.
 | Nom | Défaut | Firmware |
 |---|---|---|
 | `T_init_manuel` | 25 °C | `Config.T_init` (mode manuel) |
-| `Hhyst` *(origine)* | 5 °C | `Config.Hhyst` |
-| `Temps_Min_Fin` *(origine)* | 7200 s | `Config.Temps_Min_Fin` (120 min) |
+| `Hhyst` | 5 °C | `Config.Hhyst` |
+| `Temps_Min_Fin` | 7200 s | `Config.Temps_Min_Fin` (120 min) |
 | `Duree_Max_Cycle` | 36000 s | `Config.Duree_Max_Cycle` (600 min) |
 | `Temps_Reponse` | 300 s | `Config.Temps_Reponse` |
 | `Temps_Purge`, `Temps_Allumage` | 120 s, 4 s | idem |
@@ -112,7 +111,7 @@ certaines durées en minutes : multiplier par 60.
 | `DeltaT_Sol`, `Marge_Sol`, `Hyst_Sol` | 20, 0, 5 °C | idem |
 | `Seuil_Chaud` | 40 °C | `Config.Seuil_Chaud` |
 | `Press_H2_Min`, `Marge_Retour_H2` | 2 bar, 0,5 bar | idem |
-| `Seuil_MQ8`, `Seuil_MQ6` | 350 | idem (utilisés par la transition d'origine 118, jusque-là non déclarés) |
+| `Seuil_MQ8`, `Seuil_MQ6` | 350 | idem |
 | `Fixe_T_amb/H_amb/H_sec/Press`, `Val_…` | 0 (AUTO), 25/40/60/5 | grandeurs FIXE/AUTO |
 | `MAX_ECHECS`, `MAX_PERTES_FLAMME` | 3, 1 | constantes firmware |
 | `T_SEC_MAX_SECURITE`, `DELAI_FLAMME_PARASITE` | 90 °C, 5 s | constantes firmware |
@@ -123,8 +122,8 @@ certaines durées en minutes : multiplier par 60.
 |---|---|
 | `T_amb_e`, `H_amb_e`, `H_sec_e`, `Press_e` | grandeurs effectives (mesure, ou valeur fixe saisie) |
 | `T_cap_est` | `T_amb_e + DeltaT_Sol` |
-| `H_fin` *(origine)* | `min(H_produit + H_amb_e, 95)` |
-| `T_init`, `T1_seuil`, `T2_seuil` *(origine)*, `T3_seuil` | seuils de palier |
+| `H_fin` | `min(H_produit + H_amb_e, 95)` |
+| `T_init`, `T1_seuil`, `T2_seuil`, `T3_seuil` | seuils de palier |
 | `regime_chaud` | repère FROID (0) / CHAUD (1) |
 | `Mode_Auto_Eff`, `Mode_Auto_prev` | mode effectif (le choix fait en erreur prime jusqu'au prochain changement du sélecteur) |
 | `palier` | 0 = 100 %, 1 = 67 %, 2 = 33 %, 3 = 0 % |
@@ -179,7 +178,7 @@ issues du même état.
 |---|---|---|
 | *(défaut du chart)* → `FONCTIONNEMENT_NORMAL` | — | — |
 | *(défaut de `FONCTIONNEMENT_NORMAL`)* → `ATTENTE_DEMARRAGE` | — | — |
-| `FONCTIONNEMENT_NORMAL` → `URGENCE_ATEX` *(origine, SSID 118)* | `MQ8_H2 >= Seuil_MQ8 \|\| MQ6_But >= Seuil_MQ6 \|\| AU_Manuel == 1` | — |
+| `FONCTIONNEMENT_NORMAL` → `URGENCE_ATEX` | `MQ8_H2 >= Seuil_MQ8 \|\| MQ6_But >= Seuil_MQ6 \|\| AU_Manuel == 1` | — |
 | `FONCTIONNEMENT_NORMAL` → `URGENCE_ATEX` | `duration(Flame==1 && V_H2==0 && V_But==0) >= DELAI_FLAMME_PARASITE` | `cause_urgence=5` |
 | `URGENCE_ATEX` → `ATTENTE_DEMARRAGE` | `(Btn_OK \|\| Btn_Rearm) && MQ8_H2 < Seuil_MQ8 && MQ6_But < Seuil_MQ6 && AU_Manuel==0 && Flame==0` | `Buzzer=0; palier=0; raison_purge=0; cause_urgence=0` |
 | `EN_CYCLE` → `SECHAGE_TERMINE` | `Btn_Stop==1` | fermer_gaz |
@@ -194,8 +193,8 @@ issues du même état.
 | Source → Destination | Condition | Action |
 |---|---|---|
 | *(défaut)* → `MODE_SOLAIRE` | — | — (sécurité : jamais de gaz par défaut) |
-| `ATTENTE` → `MODE_SOLAIRE` *(origine 119, manuel)* | `Btn_Start && Mode_Auto_Eff==0 && Choix_Manuel==1` | — (garde alignée sur `Mode_Auto_Eff` par le script) |
-| `ATTENTE` → `MODE_H2` *(origine 120, manuel)* | `Btn_Start && Mode_Auto_Eff==0 && Choix_Manuel==2` | — (idem) |
+| `ATTENTE` → `MODE_SOLAIRE` *(manuel)* | `Btn_Start && Mode_Auto_Eff==0 && Choix_Manuel==1` | — |
+| `ATTENTE` → `MODE_H2` *(manuel)* | `Btn_Start && Mode_Auto_Eff==0 && Choix_Manuel==2` | — |
 | `ATTENTE` → `MODE_SOLAIRE` | `Btn_Start && Mode_Auto_Eff==1 && SOL` | — |
 | `ATTENTE` → `MODE_H2` | `Btn_Start && Mode_Auto_Eff==1 && ~SOL && Press_e >= Press_H2_Min` | — |
 | `ATTENTE` → `MODE_GPL` | `Btn_Start && Mode_Auto_Eff==1 && ~SOL && Press_e < Press_H2_Min` | — |
@@ -292,7 +291,7 @@ coupure volontaire n'est jamais prise pour une panne.
 | `palierInitial()` + `armerPurgeMiseEnRoute()` | bloc palier_initial (entry `EN_CYCLE`, transitions solaire → combustion) |
 | `entrerErreurCombustion()` + `case ETAT_ERREUR_COMBUSTION` | `ERREUR_COMBUSTION` |
 | `case ETAT_DEMANDE_PROLONGATION`, `case ETAT_PROLONGATION`, transition prioritaire 4 | région `PHASE` |
-| transitions prioritaires 1a / 1b | SSID 118 + transition `duration(...)` |
+| transitions prioritaires 1a / 1b | `FONCTIONNEMENT_NORMAL` → `URGENCE_ATEX` (fuite/AU), puis transition `duration(...)` |
 | transitions prioritaires 2 / 3 | bord de `EN_CYCLE` → `SECHAGE_TERMINE` |
 | `declencherUrgence(URG_PERTE_FLAMME)` | `REGULATION` → `URGENCE_ATEX` |
 | `case ETAT_URGENCE_ATEX` (réarmement) | `URGENCE_ATEX` → `ATTENTE_DEMARRAGE` |
@@ -307,45 +306,40 @@ les paramètres sont les données `Local` du §2.3.
 
 ## 7. Mode d'emploi
 
-1. Ouvrir **`matlab/Commande_Sechoir_Hybride_corrige.slx`** (chart d'origine +
-   corrections physiques Pnom/Kth/tauth). Ne pas partir d'un modèle déjà
-   modifié par une version précédente du script.
-2. Dans la fenêtre de commande MATLAB, se placer dans le dossier `matlab/`,
-   puis :
-   `completer_fsm_sechoir('Commande_Sechoir_Hybride_corrige')`
-3. Lire la sortie : `[HIERARCHIE INCORRECTE]` → repli manuel du §1, puis
-   relancer ; sinon, clic droit sur le chart → *Update Chart*.
-4. Câbler les **2 nouvelles entrées** `Btn_Stop` et `Btn_Rearm` (blocs
-   Constant à 0 pour une première simulation), et régler `Tps_Prolongation`
-   **en secondes** (1800).
-5. Lancer la simulation et ouvrir le *Diagnostic Viewer* : me renvoyer tout
-   message d'erreur tel quel.
+Voir **`matlab/GUIDE_SIMULATION.md`**. En bref, dans MATLAB R2025b, dossier
+`matlab/` :
+
+1. `construire_modele` : construit, compile et enregistre
+   `Simulation_Sechoir_Hybride.slx` (tout est recréé à chaque exécution) ;
+2. `lancer_simulation(1:12)` : les 12 scénarios, figures dans `captures/` ;
+3. `comparer_scenario(n)` : comparaison avec la référence du firmware ;
+4. `capturer_modele` : images du modèle et du chart.
 
 ---
 
 ## 8. Vérifications effectuées — et ce qui ne l'a pas été
 
-Effectué, sans MATLAB :
-- le script a été analysé par **MISS_HIT** (analyseur statique MATLAB) :
-  syntaxe correcte ;
-- les **37 libellés** générés (9 états, 28 transitions) ont été reconstruits et
-  analysés comme du code MATLAB : syntaxe correcte (une erreur `end end` a été
-  trouvée et corrigée ainsi) ;
-- chaque variable utilisée dans les libellés est déclarée (données d'origine
-  ou ajoutées par le script), aucune donnée ajoutée n'est inutilisée, et
-  aucune **entrée** n'est écrite ;
-- la hiérarchie, les noms de données et le langage d'action ont été relevés
-  directement dans le `.slx` d'origine (`chart_122.xml`).
+- Analyse statique de tous les scripts par **MISS_HIT** : syntaxe correcte.
+- Les fonctions de tracé et de lecture des références ont été exécutées sous
+  GNU Octave.
+- Sous **MATLAB R2025b** (essais de l'auteur avec l'approche précédente, qui
+  utilisait les mêmes textes d'actions et de transitions) : création des 56
+  données, de la hiérarchie AND/OR et des 48 transitions sans erreur d'API.
+  La compilation a échoué uniquement sur l'absence de transition par défaut
+  du chart d'origine — cause supprimée par la construction à partir de zéro.
 
-**Non vérifié** (aucun MATLAB disponible) : l'exécution du script ; les API
-`Decomposition`, changement de parent, `ExecutionOrder`, tracé des
-transitions ; les opérateurs `temporalCount` et `duration` ; la simulation
-elle-même. Le script signale chaque échec d'API au lieu de s'arrêter.
+**Reste à vérifier** : la compilation du modèle construit par
+`construire_modele`, puis la simulation des scénarios et leur comparaison avec
+la référence du firmware (`matlab/reference/`).
 
 ---
 
-## 9. Interface avec les sous-systèmes existants
+## 9. Modèle physique (construit par le même script)
 
-- `CONVERSION_PUISSANCE` reçoit `V_Fl_1..3` et produit la puissance injectée
-  dans `MODELE_THERMIQUE` (inchangé).
-- `MODELE_THERMIQUE` produit `T_sec`, rebouclé en entrée du chart (inchangé).
+- `CONVERSION_PUISSANCE` : `V_Fl_1..3` → puissance de gaz (Pnom = 5000 W).
+- `Puissance_totale` : puissance de gaz + apport solaire `P_sol` (scénario).
+- `MODELE_THERMIQUE` : τ dT_sec/dt = Kth·P + T_amb − T_sec (Kth = 0,098 K/W,
+  τ = 3530 s), `T_sec` rebouclée sur le chart.
+- `MODELE_SECHAGE` + intégrateur : `H_sec`, rebouclée sur le chart.
+- `BRULEUR` : `Flame` à partir de `V_H2`/`V_But` retardées d'un pas, pannes et
+  flamme parasite simulables.

@@ -23,6 +23,7 @@ fonctionné**. Ne l'utilisez pas. Erreurs corrigées :
 | Actions écrites en syntaxe C (`if (x) { y }`) | Le chart est en **langage d'action MATLAB** (`actionLanguage = 2`). → toute la syntaxe est MATLAB (`if x, y; end`, `~=`, `~in(...)`). |
 | Variables temporaires non déclarées (`ECART_MIN`, `delta`, `demi`) | Interdit en Stateflow. → expressions écrites en ligne. |
 | « `URGENCE_ATEX` inatteignable » | **Faux** : la transition d'origine SSID 118 (`FONCTIONNEMENT_NORMAL` → `URGENCE_ATEX`, fuite ou AU) existe. Elle est conservée, pas dupliquée. |
+| Transition d'origine SSID 31 prise pour une transition par défaut | C'est une transition **interne** sans condition du bord de `FONCTIONNEMENT_NORMAL` vers `ATTENTE_DEMARRAGE` : elle se déclencherait à chaque pas, et le chart n'avait aucune transition par défaut (erreur de compilation sous R2025b). → supprimée, remplacée par deux transitions par défaut (chart → `FONCTIONNEMENT_NORMAL`, puis → `ATTENTE_DEMARRAGE`). |
 | Renommage `AU_Manuel` → `AU_Urgence` | Aurait créé une entrée non câblée. Le port du modèle s'appelle **`AU_Manuel`** (= `AU_Urgence` du firmware) : conservé. |
 | `after(Temps_Min_Fin*60, sec)` | `Temps_Min_Fin` vaut 7200 **secondes** dans le modèle : ×60 aurait donné 120 h. → toutes les durées du chart sont en **secondes**. |
 | `Mode_Auto_Eff` recopié depuis `Mode_Auto` à chaque entrée dans `ATTENTE_DEMARRAGE` | Annulait le choix MANUEL fait en `ERREUR_COMBUSTION`. → recopie seulement quand l'**entrée** `Mode_Auto` change. |
@@ -176,6 +177,8 @@ issues du même état.
 
 | Source → Destination | Condition | Action |
 |---|---|---|
+| *(défaut du chart)* → `FONCTIONNEMENT_NORMAL` | — | — |
+| *(défaut de `FONCTIONNEMENT_NORMAL`)* → `ATTENTE_DEMARRAGE` | — | — |
 | `FONCTIONNEMENT_NORMAL` → `URGENCE_ATEX` *(origine, SSID 118)* | `MQ8_H2 >= Seuil_MQ8 \|\| MQ6_But >= Seuil_MQ6 \|\| AU_Manuel == 1` | — |
 | `FONCTIONNEMENT_NORMAL` → `URGENCE_ATEX` | `duration(Flame==1 && V_H2==0 && V_But==0) >= DELAI_FLAMME_PARASITE` | `cause_urgence=5` |
 | `URGENCE_ATEX` → `ATTENTE_DEMARRAGE` | `(Btn_OK \|\| Btn_Rearm) && MQ8_H2 < Seuil_MQ8 && MQ6_But < Seuil_MQ6 && AU_Manuel==0 && Flame==0` | `Buzzer=0; palier=0; raison_purge=0; cause_urgence=0` |

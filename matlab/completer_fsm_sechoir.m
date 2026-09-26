@@ -88,8 +88,10 @@ function t = TAG()
 end
 
 function ssids = SSID_TRANSITIONS_ORIGINE()
-    % Transitions présentes dans le .slx fourni par l'opérateur : défaut
-    % FN->ATTENTE (31), FN->URGENCE (118), manuel solaire (119), manuel H2 (120).
+    % Transitions présentes dans le .slx fourni par l'opérateur : interne
+    % FN->ATTENTE sans condition (31, supprimée et remplacée par des
+    % transitions par défaut), FN->URGENCE (118), manuel solaire (119),
+    % manuel H2 (120).
     ssids = [31 118 119 120];
 end
 
@@ -400,6 +402,14 @@ function s = placer(chart, nom, parent, position)
 end
 
 function changerParent(s, parent)
+    % Stateflow (R2025b) range un état dans le parent qui le contient
+    % géométriquement : le placement suffit en général. Les tentatives
+    % explicites ci-dessous sont silencieuses (Parent est en lecture seule).
+    etatAvertissements = warning('off', 'all');
+    nettoyage = onCleanup(@() warning(etatAvertissements));
+    if estEnfantDirect(s, parent)
+        return;
+    end
     try
         s.Parent = parent; %#ok<NASGU>
     catch
@@ -697,6 +707,20 @@ function ajouterTransitions(chart, h)
     ERR = 'in(EN_CYCLE.SOURCE.ERREUR_COMBUSTION)';
     n0 = numel(chart.find('-isa', 'Stateflow.Transition'));
 
+    % --- Transitions par défaut du chart et de FONCTIONNEMENT_NORMAL.
+    %     La transition d'origine SSID 31 n'est PAS une transition par défaut :
+    %     c'est une transition INTERNE sans condition du bord de
+    %     FONCTIONNEMENT_NORMAL vers ATTENTE_DEMARRAGE. Elle se déclencherait à
+    %     chaque pas (retour permanent en ATTENTE) et le chart n'avait aucune
+    %     transition par défaut ("must contain a default transition").
+    supprimerTransitionInterne(chart, h.fn, h.att);
+    if ~aUneTransitionParDefaut(chart, h.fn)
+        transition(chart, [], h.fn, '');                    % défaut du chart
+    end
+    if ~aUneTransitionParDefaut(chart, h.att)
+        transition(chart, [], h.att, '');                   % défaut de FONCTIONNEMENT_NORMAL
+    end
+
     % --- Transitions par défaut des nouveaux états OR ---
     transition(chart, [], h.sol, '');                       % SOURCE (sécurité : pas de gaz)
     transition(chart, [], h.nor, '');                       % PHASE
@@ -772,6 +796,30 @@ function ajouterTransitions(chart, h)
 
     n1 = numel(chart.find('-isa', 'Stateflow.Transition'));
     fprintf('  [ok] %d transitions creees\n', n1 - n0);
+end
+
+function supprimerTransitionInterne(chart, parent, enfant)
+    trs = chart.find('-isa', 'Stateflow.Transition');
+    for i = 1:numel(trs)
+        t = trs(i);
+        if ~isempty(t.Source) && t.Source == parent && t.Destination == enfant ...
+                && isempty(strtrim(t.LabelString))
+            fprintf('  [supprime] transition interne sans condition SSID %d : %s -> %s\n', ...
+                t.SSID, nomEtat(parent), nomEtat(enfant));
+            t.delete;
+        end
+    end
+end
+
+function b = aUneTransitionParDefaut(chart, dst)
+    b = false;
+    trs = chart.find('-isa', 'Stateflow.Transition');
+    for i = 1:numel(trs)
+        if isempty(trs(i).Source) && trs(i).Destination == dst
+            b = true;
+            return;
+        end
+    end
 end
 
 function ajouterTransitionsCombustion(chart, h, sm)

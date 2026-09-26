@@ -234,13 +234,23 @@ function preparer_simulation(source, cible)
         fprintf('  [ok] le modele compile sans erreur\n');
     catch e
         fprintf('  [ERREUR] compilation : %s\n', e.message);
-        fprintf('  (ouvrez le Diagnostic Viewer et copiez-moi le message complet)\n');
+        afficherCauses(e, '    ');
+        fprintf('  (copiez-moi toute cette liste)\n');
     end
     save_system(cible);
     fprintf('=== %s.slx enregistre. Etape suivante : lancer_simulation(1) ===\n', cible);
 end
 
 %% ---------------------------------------------------------------------
+function afficherCauses(e, retrait)
+    % Détail d'une erreur Simulink à causes multiples (contenu du Diagnostic Viewer).
+    for k = 1:numel(e.cause)
+        c = e.cause{k};
+        fprintf('%s- %s\n', retrait, c.message);
+        afficherCauses(c, [retrait '  ']);
+    end
+end
+
 function supprimerLignes(sys)
     lignes = find_system(sys, 'SearchDepth', 1, 'FindAll', 'on', 'Type', 'line');
     for i = 1:numel(lignes)

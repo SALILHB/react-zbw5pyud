@@ -10,6 +10,7 @@
 function fig = tracer_scenario(r)
 
     sc = r.sc;
+    r = alleger_resultat(r);   % ~4000 points au lieu de 36 000 par heure
     t = r.t / 60;
     Tc = valeurSignal(sc.signaux.T_cible, r.t);
     Ta = valeurSignal(sc.signaux.T_amb, r.t);
@@ -19,7 +20,7 @@ function fig = tracer_scenario(r)
 
     % Fenêtre séparée : dans le bureau MATLAB R2025, une figure ancrée ignore
     % Position, et l'image exportée n'aurait pas la bonne taille.
-    fig = figure('Color', 'w', 'WindowStyle', 'normal', 'Position', [80 40 1000 980], ...
+    fig = figure('Color', 'w', 'WindowStyle', 'normal', 'Position', taille_figure(1000, 980), ...
                  'Name', sprintf('Scenario %d', sc.num));
 
     % --- 1. Températures

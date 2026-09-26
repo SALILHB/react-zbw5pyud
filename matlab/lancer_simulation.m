@@ -43,7 +43,7 @@ function res = lancer_simulation(numeros, modele)
         r.sc = sc;
         journal_scenario(r);
         fig = tracer_scenario(r);
-        exporter(fig, fullfile(dossierCaptures, sprintf('scenario_%02d.png', n)));
+        exporter_figure(fig, fullfile(dossierCaptures, sprintf('scenario_%02d.png', n)));
         save(fullfile(dossierCaptures, sprintf('scenario_%02d.mat', n)), 'r');
         fprintf('Figure : captures/scenario_%02d.png\n', n);
         res = [res, r]; %#ok<AGROW>
@@ -80,13 +80,5 @@ function v = aligner(ts, t)
         v = D;
     else
         v = interp1(ts.Time(:), D, t, 'previous', 'extrap');
-    end
-end
-
-function exporter(fig, fichier)
-    if ~isempty(which('exportgraphics'))
-        exportgraphics(fig, fichier, 'Resolution', 300);
-    else
-        print(fig, fichier, '-dpng', '-r300');
     end
 end

@@ -11,12 +11,12 @@ function comparer_scenario(n)
 
     dossier = fileparts(mfilename('fullpath'));
     donnees = load(fullfile(dossier, 'captures', sprintf('scenario_%02d.mat', n)));
-    s = donnees.r;
-    f = charger_reference(n);
+    s = alleger_resultat(donnees.r);
+    f = alleger_resultat(charger_reference(n));
 
     % Fenêtre séparée : dans le bureau MATLAB R2025, une figure ancrée ignore
     % Position, et l'image exportée n'aurait pas la bonne taille.
-    fig = figure('Color', 'w', 'WindowStyle', 'normal', 'Position', [80 80 1000 650], ...
+    fig = figure('Color', 'w', 'WindowStyle', 'normal', 'Position', taille_figure(1000, 650), ...
                  'Name', sprintf('Comparaison scenario %d', n));
     a1 = subplot(2, 1, 1);
     plot(s.t / 60, s.T_sec, 'LineWidth', 1.8, 'Color', [0.17 0.42 0.69]);
@@ -39,11 +39,7 @@ function comparer_scenario(n)
     drawnow;
 
     fichier = fullfile(dossier, 'captures', sprintf('comparaison_%02d.png', n));
-    if ~isempty(which('exportgraphics'))
-        exportgraphics(fig, fichier, 'Resolution', 300);
-    else
-        print(fig, fichier, '-dpng', '-r300');
-    end
+    exporter_figure(fig, fichier);
 
     [ts, es] = changements(s);
     [tf, ef] = changements(f);

@@ -261,9 +261,10 @@ function s = etat(parent, nom, position)
 end
 
 function sm = sousMachine(mode, y)
-    sm.purge      = etat(mode, 'PURGE',      [110 y 190 190]);
-    sm.allumage   = etat(mode, 'ALLUMAGE',   [320 y 190 190]);
-    sm.regulation = etat(mode, 'REGULATION', [530 y 210 190]);
+    % hauteur 170 : 40 px libres en bas pour les retours vers PURGE
+    sm.purge      = etat(mode, 'PURGE',      [110 y 190 170]);
+    sm.allumage   = etat(mode, 'ALLUMAGE',   [320 y 190 170]);
+    sm.regulation = etat(mode, 'REGULATION', [530 y 210 170]);
 end
 
 function ordreExecution(s, n)
@@ -489,13 +490,66 @@ function t = transition(chart, src, dst, label)
             t.SourceEndpoint = t.DestinationEndpoint - [0 25];
             t.Midpoint = t.DestinationEndpoint - [0 12];
         elseif src == dst
-            t.SourceOClock = 2;
-            t.DestinationOClock = 4;
+            if nbTransitionsEntre(chart, src, dst) <= 1
+                t.SourceOClock = 2;       % 1re boucle : à droite
+                t.DestinationOClock = 4;
+            else
+                t.SourceOClock = 10;      % 2e boucle : à gauche
+                t.DestinationOClock = 8;
+            end
+        else
+            placerTrace(chart, t, src, dst);
         end
     catch
     end
     t.LabelString = label;
     t.Description = TAG();
+end
+
+function placerTrace(chart, t, src, dst)
+    % Trace droit entre les bords qui se font face, pour que la transition
+    % reste DANS son parent naturel (sinon Stateflow sort et rentre dans le
+    % parent à chaque franchissement, avec un avertissement). Plusieurs
+    % transitions entre les deux mêmes états sont décalées en parallèle.
+    ps = src.Position;
+    pd = dst.Position;
+    d = (pd(1:2) + pd(3:4) / 2) - (ps(1:2) + ps(3:4) / 2);
+    if abs(d(1)) >= abs(d(2))
+        if d(1) > 0, so = 3; do = 9; else, so = 9; do = 3; end
+    else
+        if d(2) > 0, so = 6; do = 12; else, so = 12; do = 6; end
+    end
+    decalages = [0 0.6 -0.6 1.2 -1.2 1.8 -1.8];
+    k = min(nbTransitionsEntre(chart, src, dst), numel(decalages));
+    ecart = abs(d(1)) - (ps(3) + pd(3)) / 2;   % espace horizontal entre les boîtes
+    if abs(d(1)) >= abs(d(2)) && ecart > 40 && strcmp(src.Path, dst.Path)
+        % États frères non voisins (un autre état entre eux) : arc passant
+        % sous les boîtes, dans la marge du parent.
+        t.SourceOClock = mod(6 + decalages(k), 12);
+        t.DestinationOClock = mod(6 - decalages(k), 12);
+        bas = max(ps(2) + ps(4), pd(2) + pd(4));
+        t.Midpoint = [(ps(1) + ps(3) / 2 + pd(1) + pd(3) / 2) / 2, bas + 8 + 12 * (k - 1)];
+    else
+        t.SourceOClock = mod(so + decalages(k), 12);
+        t.DestinationOClock = mod(do - decalages(k), 12);
+        t.Midpoint = (t.SourceEndpoint + t.DestinationEndpoint) / 2;
+    end
+end
+
+function n = nbTransitionsEntre(chart, a, b)
+    % Nombre de transitions (déjà créées) entre a et b, dans les deux sens.
+    n = 0;
+    trs = chart.find('-isa', 'Stateflow.Transition');
+    for i = 1:numel(trs)
+        s = trs(i).Source;
+        if isempty(s)
+            continue;
+        end
+        d = trs(i).Destination;
+        if (s == a && d == b) || (s == b && d == a)
+            n = n + 1;
+        end
+    end
 end
 
 function c = ancetreCommun(a, b)

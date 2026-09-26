@@ -1,5 +1,5 @@
 /* ============================================================================
- *  BANC DE TESTS — Séchoir solaire hybride v2
+ *  BANC DE TESTS — Séchoir solaire hybride v3
  *
  *  Le programme Arduino est compilé TEL QUEL sur PC : les bibliothèques
  *  matérielles sont remplacées par les mocks de tests/mocks/. Le banc pilote
@@ -61,7 +61,9 @@ static void avancer(uint32_t duree_ms, uint32_t pas = 20) {
 }
 
 static void uneIteration() { avancer(20, 20); }
-static void rafraichirCapteurs() { avancer(1200); }
+/* 2,5 s : couvre au moins une lecture capteurs (1 s) PUIS une comparaison de
+ * régulation (Periode_Regul = 1 s au banc), quel que soit leur déphasage. */
+static void rafraichirCapteurs() { avancer(2500); }
 
 static void appuyer(uint8_t pin) {
   mockIO.entree_num[pin] = LOW;
@@ -77,7 +79,10 @@ static int adcPression(float bar) {
 }
 
 static void reglerTsec(float valeur) { mock_ds18b20[IDX_SONDE_T_SEC] = valeur; }
-static void reglerTcap(float valeur) { mock_ds18b20[IDX_SONDE_T_CAP] = valeur; }
+/* V3 : T_cap n'est plus lue sur la plaque mais estimée par T_amb + DeltaT_Sol.
+ * Régler « T_cap » revient donc à régler T_amb en conséquence. */
+static void reglerTamb(float valeur) { mock_dht_temp[PIN_DHT_AMB] = valeur; }
+static void reglerTcap(float valeur) { reglerTamb(valeur - Config.DeltaT_Sol); }
 static void reglerHsec(float valeur) { mock_dht_hum[PIN_DHT_EXTR] = valeur; }
 static void reglerHamb(float valeur) { mock_dht_hum[PIN_DHT_AMB] = valeur; }
 static void reglerFlamme(bool presente) {
@@ -102,8 +107,8 @@ static void initBanc() {
   mockIO.entree_ana[PIN_PRESS_H2]   = adcPression(8.0f);
 
   reglerTsec(25.0f);
-  reglerTcap(20.0f);                          // solaire indisponible
-  mock_dht_temp[PIN_DHT_AMB]  = 25.0f;
+  mock_ds18b20[IDX_SONDE_T_CAP] = 20.0f;      // sonde plaque : affichage seul en V3
+  reglerTamb(25.0f);                          // T_cap estimée = 25 + 20 = 45 < ON : pas de solaire
   mock_dht_temp[PIN_DHT_EXTR] = 40.0f;
   reglerHamb(35.0f);
   reglerHsec(90.0f);
@@ -116,13 +121,19 @@ static void initBanc() {
   Config.T_init          = 25.0f;
   Config.H_produit_cible = 10.0f;
   Config.Duree_Max_Cycle = 600UL;             // min
-  Config.Temps_Prolongation = 180UL;          // min
+  Config.Prolong_Defaut  = 30UL;              // min
   Config.Temps_Min_Fin   = 120UL;             // min (2 h)
-  Config.Temps_Arret_Auto = 300UL;            // s
+  Config.Temps_Reponse   = 300UL;             // s
   Config.Temps_Purge     = 120UL;             // s
   Config.Temps_Allumage  = 4UL;               // s
   Config.Hhyst           = 5.0f;
+  Config.Periode_Regul   = 1UL;               // s
+  Config.Regul_Auto      = true;
   Config.Press_H2_Min    = 2.0f;
+  Config.DeltaT_Sol      = 20.0f;             // T_cap = T_amb + 20
+  Config.Marge_Sol       = 0.0f;              // ON = T_cible = 55
+  Config.Hyst_Sol        = 5.0f;              // OFF = 50
+  Config.Seuil_Chaud     = 40.0f;             // CHAUD si T_sec >= 40 (+/- 2,5)
 }
 
 static void demarrerEtAllumer() {
@@ -220,8 +231,9 @@ static void cas_hysteresis_quatre_niveaux() {
 
   /* La demande de chauffe revient : reallumage direct au palier 33% (pas
    * 100%), apres une purge deja largement satisfaite. */
-  reglerTsec(52.0f);  // < T3 - 2,5 = 52,5 -> presque ; on descend encore un peu
+  reglerTsec(52.6f);  // juste au-dessus de T3 - 2,5 = 52,5 : toujours en veille
   rafraichirCapteurs();
+  verifier(phase_combustion == PH_PURGE, "52,6 C >= T3-2,5 : reste en veille");
   reglerTsec(50.0f);
   rafraichirCapteurs();
   verifier(phase_combustion == PH_ALLUMAGE, "la demande revient -> nouvel allumage");
@@ -282,6 +294,25 @@ static void cas_perte_flamme() {
   verifier(phase_combustion == PH_PURGE, "retour PURGE");
   verifier(raison_purge == PURGE_ECHEC, "raison = ECHEC (perte de flamme)");
   verifier(mockIO.sortie_num[PIN_EV1] == LOW, "broche EV1 physiquement retombee");
+  verifier(etat_courant == ETAT_MODE_H2, "1re perte : relance autorisee (pas d'urgence)");
+  verifier(nb_pertes_flamme == 1, "1re perte comptabilisee");
+  verifier(nb_echecs_allumage == 0, "une perte de flamme n'est pas un echec d'allumage");
+
+  /* Relance : purge complete puis rallumage au meme palier. */
+  avancer(purgeMs() + 200);
+  verifier(phase_combustion == PH_ALLUMAGE, "relance : nouvel allumage apres purge");
+  reglerFlamme(true);
+  uneIteration();
+  verifier(phase_combustion == PH_PALIER_100, "flamme retablie");
+
+  /* 2e perte dans le meme cycle : verrouillage en URGENCE. */
+  reglerFlamme(false);
+  uneIteration();
+  verifier(etat_courant == ETAT_URGENCE_ATEX, "2e perte de flamme -> URGENCE");
+  verifier(cause_urgence == URG_PERTE_FLAMME, "cause affichee = PERTE FLAMME");
+  verifier(!EV1 && !EV2 && !EV3 && !V_H2 && !V_But, "gaz ferme");
+  appuyer(PIN_BTN_REARM);
+  verifier(etat_courant == ETAT_ATTENTE_DEMARRAGE, "rearmement accepte (flamme eteinte, aucune fuite)");
 }
 
 /* --------------------------------------------------------------------------
@@ -298,7 +329,6 @@ static void cas_echecs_repetes_escalade() {
   }
   verifier(nb_echecs_allumage >= MAX_ECHECS_AVANT_ALARME, "seuil d'echecs atteint");
   verifier(etat_courant == ETAT_ERREUR_COMBUSTION, "escalade vers ERREUR_COMBUSTION");
-  verifier(raison_erreur_combustion == ERR_ALLUMAGE_REPETE, "raison = ALLUMAGE_REPETE");
   verifier(Buzzer, "buzzer actif en erreur de combustion");
   verifier(!EV1 && !EV2 && !EV3 && !V_H2 && !V_But, "gaz ferme en attente de decision");
 
@@ -351,10 +381,10 @@ static void cas_bascule_h2_gpl_reussie() {
 }
 
 /* --------------------------------------------------------------------------
- *  CAS 7 — Echec du basculement -> ERREUR_COMBUSTION des le 1er echec (§13)
+ *  CAS 7 — Echec apres bascule : MEME regle de 3 essais que partout (V3)
  * ------------------------------------------------------------------------*/
 static void cas_bascule_echouee() {
-  ouvrirCas("7. Echec du basculement : escalade des le 1er echec (pas de boucle silencieuse)");
+  ouvrirCas("7. Echec apres bascule : 3 essais (purge entre chaque) puis ERREUR");
   initBanc();
   Config.Mode_Auto = true;
   reglerTcap(20.0f);
@@ -364,18 +394,22 @@ static void cas_bascule_echouee() {
   mockIO.entree_ana[PIN_PRESS_H2] = adcPression(0.5f);
   uneIteration();
   verifier(Source_Active == SRC_GPL, "bascule declenchee vers GPL");
+  verifier(nb_echecs_allumage == 0, "la nouvelle source dispose d'un jeu complet d'essais");
 
-  /* Le GPL est simule indisponible : la flamme ne doit JAMAIS se confirmer.
-   * Sans ce reglage, Flame resterait "vraie" depuis demarrerEtAllumer() et
-   * l'allumage "reussirait" artificiellement, invalidant tout le scenario. */
+  /* Le GPL est simule indisponible : la flamme ne doit JAMAIS se confirmer. */
   reglerFlamme(false);
 
   avancer(purgeMs() + 200);
-  verifier(phase_combustion == PH_ALLUMAGE, "tentative d'allumage sur la nouvelle source");
+  verifier(phase_combustion == PH_ALLUMAGE, "1er essai sur la nouvelle source");
   avancer(allumageMs() + 200);
+  verifier(etat_courant == ETAT_MODE_GPL, "1er echec apres bascule : PAS d'erreur immediate (V3)");
+  verifier(phase_combustion == PH_PURGE, "purge complete avant le 2e essai");
 
-  verifier(etat_courant == ETAT_ERREUR_COMBUSTION, "echec de bascule -> ERREUR_COMBUSTION direct");
-  verifier(raison_erreur_combustion == ERR_BASCULEMENT, "raison = BASCULEMENT");
+  for (uint16_t i = 1; i < MAX_ECHECS_AVANT_ALARME; i++) {
+    avancer(purgeMs() + 200);
+    avancer(allumageMs() + 200);
+  }
+  verifier(etat_courant == ETAT_ERREUR_COMBUSTION, "3e echec -> ERREUR_COMBUSTION");
   verifier(Buzzer, "alarme sonore");
   verifier(!EV1 && !EV2 && !EV3 && !V_H2 && !V_But, "gaz ferme");
 
@@ -449,85 +483,98 @@ static void cas_fin_de_cycle_verrouillee() {
   /* Franchissement de Temps_Min_Fin : la demande d'arret apparait. */
   avancer(2UL * 60000UL, 5000);
   rafraichirCapteurs();
-  verifier(etat_courant == ETAT_FIN_TEMPORISATION, "Temps_Min_Fin ecoule + H_sec<=H_fin -> FIN_TEMPORISATION");
+  verifier(etat_courant == ETAT_DEMANDE_PROLONGATION, "Temps_Min_Fin ecoule + H_sec<=H_fin -> DEMANDE_PROLONGATION");
+  verifier(motif_demande == MOTIF_HUMIDITE, "motif = HUMIDITE (critere prioritaire)");
 }
 
 /* --------------------------------------------------------------------------
- *  CAS 10 — FIN_TEMPORISATION : confirmation, annulation, arret auto (§6)
+ *  CAS 10 — DEMANDE_PROLONGATION apres humidite atteinte (V3)
  * ------------------------------------------------------------------------*/
-static void cas_fin_temporisation() {
-  ouvrirCas("10. FIN_TEMPORISATION : confirmation operateur / report / arret auto");
+static void cas_demande_prolongation() {
+  ouvrirCas("10. Humidite atteinte -> demande de prolongation / sans reponse -> TERMINE");
   initBanc();
-  Config.Temps_Min_Fin = TEMPS_MIN_FIN_MIN; // plancher de securite (deja teste au cas 9)
-  Config.Temps_Arret_Auto = 60UL;           // 1 min pour le banc
+  Config.Temps_Min_Fin = 10UL;
+  Config.Temps_Reponse = 60UL;              // 1 min pour le banc
+  Config.Prolong_Defaut = 5UL;
   demarrerEtAllumer();
 
   avancer(Config.Temps_Min_Fin * 60000UL + 2000, 5000);
   reglerHsec(20.0f);
   rafraichirCapteurs();
-  verifier(etat_courant == ETAT_FIN_TEMPORISATION, "demande d'arret affichee");
-  verifier(EV1 || EV2 || EV3 || V_H2, "la regulation continue pendant la fenetre de confirmation");
+  verifier(etat_courant == ETAT_DEMANDE_PROLONGATION, "humidite atteinte -> DEMANDE_PROLONGATION");
+  verifier(motif_demande == MOTIF_HUMIDITE, "motif = HUMIDITE");
+  verifier(EV1 || EV2 || EV3 || V_H2, "la regulation continue pendant la question");
+  verifier(duree_prolongation_min == 5UL, "duree proposee = Prolong_Defaut");
 
-  /* Report manuel (Menu) : la condition hygrometrique reste vraie, donc on
-   * ne peut pas repartir en regulation normale (§6 : le report redonne
-   * seulement une pleine fenetre de confirmation, voir le commentaire dans
-   * pasFSM()). On verifie que le compte a rebours a bien ete relance. */
-  avancer(40000);   // 40 s sur les 60 s de la fenetre
-  uint32_t chrono_avant_report = chrono_arret_auto;
-  appuyer(PIN_BTN_MENU);
-  verifier(etat_courant == ETAT_FIN_TEMPORISATION, "le report reste en FIN_TEMPORISATION (condition toujours vraie)");
-  verifier(chrono_arret_auto != chrono_avant_report, "le compte a rebours a ete relance par le report");
+  /* UP : +5 min, et le delai de reponse repart (operateur present). */
+  avancer(40000);
+  appuyer(PIN_BTN_UP);
+  verifier(duree_prolongation_min == 10UL, "UP : duree proposee +5 min");
+  avancer(40000);
+  verifier(etat_courant == ETAT_DEMANDE_PROLONGATION, "le delai de reponse a ete relance par UP");
 
-  /* On laisse ensuite expirer le delai complet : arret automatique. */
-  avancer(Config.Temps_Arret_Auto * 1000UL + 2000, 5000);
-  verifier(etat_courant == ETAT_SECHAGE_TERMINE, "arret automatique apres Temps_Arret_Auto");
-  verifier(!arret_force_duree, "arret normal (pas de plafond de duree depasse)");
-
-  /* Confirmation manuelle (OK) : verifiee separement, cycle independant. */
-  initBanc();
-  Config.Temps_Min_Fin = TEMPS_MIN_FIN_MIN;
-  demarrerEtAllumer();
-  avancer(Config.Temps_Min_Fin * 60000UL + 2000, 5000);
-  reglerHsec(20.0f);
-  rafraichirCapteurs();
-  verifier(etat_courant == ETAT_FIN_TEMPORISATION, "demande d'arret affichee (2e cycle)");
+  /* OK : prolongation de 10 min ; l'humidite deja atteinte ne la coupe pas. */
   appuyer(PIN_BTN_OK);
-  verifier(etat_courant == ETAT_SECHAGE_TERMINE, "confirmation operateur (OK) -> arret immediat");
+  verifier(etat_courant == ETAT_PROLONGATION, "OK -> PROLONGATION");
+  avancer(5UL * 60000UL, 5000);
+  verifier(etat_courant == ETAT_PROLONGATION, "humidite deja atteinte : les N min choisies sont respectees");
+  avancer(5UL * 60000UL + 5000, 5000);
+  verifier(etat_courant == ETAT_DEMANDE_PROLONGATION, "fin des N min -> on redemande");
+  verifier(motif_demande == MOTIF_FIN_PROLONGATION, "motif = FIN_PROLONGATION");
+
+  /* Aucune reponse pendant Temps_Reponse : fin du sechage, bruleur a 0 %.
+   * Pas fin (500 ms) : le mock ne simule pas l'extinction physique de la
+   * flamme apres fermeture du gaz, il ne faut donc pas depasser le delai
+   * DELAI_FLAMME_PARASITE_MS avant de verifier. */
+  avancer(chrono_demande + Config.Temps_Reponse * 1000UL + 1000 - t_boucle, 500);
+  verifier(etat_courant == ETAT_SECHAGE_TERMINE, "sans reponse -> SECHAGE_TERMINE");
+  verifier(!EV1 && !EV2 && !EV3 && !V_H2 && !V_But, "gaz ferme (0 %)");
+
+  /* STOP pendant la question : fin immediate (cycle independant). */
+  initBanc();
+  Config.Temps_Min_Fin = 10UL;
+  demarrerEtAllumer();
+  avancer(Config.Temps_Min_Fin * 60000UL + 2000, 5000);
+  reglerHsec(20.0f);
+  rafraichirCapteurs();
+  verifier(etat_courant == ETAT_DEMANDE_PROLONGATION, "demande affichee (2e cycle)");
+  appuyer(PIN_BTN_STOP);
+  verifier(etat_courant == ETAT_SECHAGE_TERMINE, "STOP -> fin immediate");
 }
 
 /* --------------------------------------------------------------------------
- *  CAS 11 — PROLONGATION avec plafond Temps_Prolongation (AVIS n°2 : ajout
- *  demande par le cahier des charges v2, qui contredit la regle v1
- *  « sans nouvelle limite de temps ». Implemente tel que demande.)
+ *  CAS 11 — Duree max atteinte -> demande ; humidite atteinte PENDANT la
+ *  prolongation -> on redemande tout de suite (V3)
  * ------------------------------------------------------------------------*/
-static void cas_prolongation_plafonnee() {
-  ouvrirCas("11. PROLONGATION plafonnee par Temps_Prolongation : arret force");
+static void cas_duree_max_puis_humidite() {
+  ouvrirCas("11. Duree max -> demande ; humidite atteinte en prolongation -> redemande");
   initBanc();
-  Config.Duree_Max_Cycle = 3UL;         // 3 min
-  Config.Temps_Prolongation = 2UL;      // 2 min de rallonge max
-  Config.Temps_Min_Fin = TEMPS_MIN_FIN_MIN;
-  reglerTsec(30.0f);
+  Config.Duree_Max_Cycle = 15UL;        // minimum autorise
+  Config.Temps_Min_Fin = 0UL;
+  Config.Prolong_Defaut = 30UL;
+  demarrerEtAllumer();
+  reglerHsec(80.0f);                    // H_sec > H_fin : humidite non atteinte
   rafraichirCapteurs();
 
-  demarrerEtAllumer();
-  reglerHsec(80.0f);   // H_sec > H_fin tout du long : jamais de fin normale
-
-  /* On avance juste assez pour depasser Duree_Max_Cycle (3 min) sans encore
-   * atteindre le plafond Temps_Prolongation (2 min de plus, soit 5 min au
-   * total depuis chrono_cycle). Le calcul part du temps reellement ecoule
-   * (demarrerEtAllumer() a deja consomme purge + allumage). */
-  uint32_t echeance_max_cycle_ms = Config.Duree_Max_Cycle * 60000UL;
+  uint32_t echeance_ms = Config.Duree_Max_Cycle * 60000UL;
   uint32_t ecoule_ms = t_boucle - chrono_cycle;
-  verifier(ecoule_ms < echeance_max_cycle_ms, "pre-requis : Duree_Max_Cycle pas deja ecoulee");
-  avancer(echeance_max_cycle_ms - ecoule_ms + 2000, 5000);
-  verifier(etat_courant == ETAT_PROLONGATION, "passage en PROLONGATION apres Duree_Max_Cycle");
-  verifier(!arret_force_duree, "pas encore d'arret force a ce stade");
+  verifier(ecoule_ms < echeance_ms, "pre-requis : Duree_Max_Cycle pas deja ecoulee");
+  avancer(echeance_ms - ecoule_ms - 60000UL, 5000);
+  verifier(etat_courant == ETAT_MODE_H2, "avant Duree_Max_Cycle : fonctionnement normal");
+  avancer(2UL * 60000UL, 5000);
+  verifier(etat_courant == ETAT_DEMANDE_PROLONGATION, "Duree_Max_Cycle -> DEMANDE_PROLONGATION");
+  verifier(motif_demande == MOTIF_DUREE_MAX, "motif = DUREE MAX");
 
-  /* On avance ensuite jusqu'a depasser le plafond Temps_Prolongation. */
-  avancer(Config.Temps_Prolongation * 60000UL + 5000, 5000);
-  verifier(etat_courant == ETAT_SECHAGE_TERMINE, "plafond Temps_Prolongation atteint -> arret force");
-  verifier(arret_force_duree, "indicateur d'arret force active (humidite non garantie)");
-  verifier(!EV1 && !EV2 && !EV3 && !V_H2 && !V_But, "gaz ferme apres arret force");
+  appuyer(PIN_BTN_OK);
+  verifier(etat_courant == ETAT_PROLONGATION, "prolongation acceptee (30 min)");
+  avancer(60000UL, 5000);
+  verifier(etat_courant == ETAT_PROLONGATION, "toujours en prolongation");
+
+  reglerHsec(20.0f);
+  rafraichirCapteurs();
+  verifier(etat_courant == ETAT_DEMANDE_PROLONGATION, "humidite atteinte en prolongation -> redemande");
+  verifier(motif_demande == MOTIF_HUMIDITE, "motif = HUMIDITE ATTEINTE");
+  verifier(V_H2 || EV3, "la combustion n'a jamais ete interrompue");
 }
 
 /* --------------------------------------------------------------------------
@@ -545,6 +592,8 @@ static void cas_urgence_et_rearmement() {
   verifier(!EV1 && !EV2 && !EV3 && !V_H2 && !V_But, "fermeture immediate de tout le gaz");
   verifier(Buzzer, "buzzer actif");
   verifier(mockIO.sortie_pwm[PIN_PWM_PURGE] == 255, "PWM purge physiquement a 255");
+  verifier(cause_urgence == URG_FUITE_H2, "cause affichee = FUITE H2");
+  reglerFlamme(false);   // gaz coupe : la flamme reelle s'eteint
 
   appuyer(PIN_BTN_REARM);
   verifier(etat_courant == ETAT_URGENCE_ATEX, "rearmement refuse : fuite toujours presente");
@@ -559,22 +608,24 @@ static void cas_urgence_et_rearmement() {
   uneIteration();
   verifier(etat_courant == ETAT_URGENCE_ATEX, "arret d'urgence -> URGENCE_ATEX");
   verifier(Menu_Index == MENU_REARMEMENT, "option Rearmement presentee d'office");
+  verifier(cause_urgence == URG_ARRET_URGENCE, "cause affichee = ARRET URGENCE");
   appuyer(PIN_BTN_OK);
   verifier(etat_courant == ETAT_URGENCE_ATEX, "rearmement menu refuse : AU toujours enfonce");
 
   mockIO.entree_num[PIN_AU_URGENCE] = LOW;
   uneIteration();
   for (uint8_t i = 0; i < NB_CHAMPS_MENU; i++) appuyer(PIN_BTN_MENU);
-  verifier(Menu_Index == MENU_REARMEMENT, "navigation menu : tour complet (17 champs)");
+  verifier(Menu_Index == MENU_REARMEMENT, "navigation menu : tour complet de tous les champs");
   appuyer(PIN_BTN_OK);
   verifier(etat_courant == ETAT_ATTENTE_DEMARRAGE, "rearmement par le menu -> ATTENTE_DEMARRAGE");
 }
 
 /* --------------------------------------------------------------------------
- *  CAS 13 — MODE_SOLAIRE strictement passif
+ *  CAS 13 — MODE_SOLAIRE strictement passif, retour combustion en regime
+ *  CHAUD (palier selon T_sec), retour solaire avec post-purge (V3)
  * ------------------------------------------------------------------------*/
 static void cas_mode_solaire_passif() {
-  ouvrirCas("13. MODE_SOLAIRE : aucune electrovanne, ventilateurs seuls");
+  ouvrirCas("13. Solaire passif ; bascule combustion en regime CHAUD ; post-purge");
   initBanc();
   Config.Mode_Auto = true;
   reglerTcap(70.0f);
@@ -587,11 +638,159 @@ static void cas_mode_solaire_passif() {
   verifier(PWM_Purge == PWM_ARRET, "purge a 0");
   verifier(PWM_Distrib == PWM_DISTRIB_SOLAIRE, "distribution elevee");
 
+  /* Le soleil a chauffe la chambre a 48 C (regime CHAUD), puis faiblit. */
   reglerTsec(48.0f);
+  rafraichirCapteurs();
+  verifier(regime_chaud, "T_sec 48 >= repere 40 + 2,5 : regime CHAUD");
+  reglerTcap(52.0f);
+  rafraichirCapteurs();
+  verifier(etat_courant == ETAT_MODE_SOLAIRE, "CHAUD : solaire garde entre OFF (50) et ON (55)");
   reglerTcap(30.0f);
   rafraichirCapteurs();
-  verifier(etat_courant == ETAT_MODE_H2, "solaire indisponible -> combustion H2");
-  verifier(palier == PALIER_100, "demarrage a froid : retour a 100%");
+  verifier(etat_courant == ETAT_MODE_H2, "sous OFF -> combustion H2");
+  verifier(palier == PALIER_33, "CHAUD : palier d'allumage selon T_sec (48 C -> 33 %), pas 100 %");
+
+  /* Allumage puis retour du soleil : extinction normale + post-purge. */
+  avancer(purgeMs() + 200);
+  reglerFlamme(true);
+  uneIteration();
+  verifier(phase_combustion == PH_PALIER_33, "combustion etablie a 33 %");
+  reglerTcap(60.0f);
+  rafraichirCapteurs();
+  reglerFlamme(false);                  // la flamme s'eteint une fois le gaz coupe
+  verifier(etat_courant == ETAT_MODE_SOLAIRE, "T_cap >= ON -> retour au solaire");
+  verifier(!V_H2 && !V_But && !EV1 && !EV2 && !EV3, "gaz ferme (extinction normale)");
+  verifier(PWM_Purge == PWM_PURGE_BALAYAGE, "post-purge en cours apres extinction");
+  avancer(purgeMs() + 1000);
+  verifier(PWM_Purge == PWM_ARRET, "post-purge terminee : ventilateurs solaires");
+  verifier(etat_courant == ETAT_MODE_SOLAIRE, "pas d'urgence : extinction normale");
+}
+
+/* --------------------------------------------------------------------------
+ *  CAS 17 — Repere FROID / CHAUD au demarrage (V3)
+ * ------------------------------------------------------------------------*/
+static void cas_repere_froid_chaud() {
+  ouvrirCas("17. Repere FROID/CHAUD : seuil solaire ON (froid) ou OFF (chaud)");
+  initBanc();
+  Config.Mode_Auto = true;
+  reglerTsec(25.0f);
+  reglerTcap(52.0f);                    // entre OFF (50) et ON (55)
+  rafraichirCapteurs();
+  appuyer(PIN_BTN_START);
+  verifier(!regime_chaud, "chambre a 25 C : regime FROID");
+  verifier(etat_courant == ETAT_MODE_H2, "FROID : 52 < ON -> combustion (pas de zone morte)");
+  verifier(palier == PALIER_100, "FROID : allumage a 100 %");
+
+  initBanc();
+  Config.Mode_Auto = true;
+  reglerTsec(45.0f);
+  reglerTcap(52.0f);
+  rafraichirCapteurs();
+  appuyer(PIN_BTN_START);
+  verifier(regime_chaud, "chambre a 45 C : regime CHAUD");
+  verifier(etat_courant == ETAT_MODE_SOLAIRE, "CHAUD : 52 >= OFF -> solaire accepte");
+
+  /* La chambre refroidit sous le repere : retour en FROID, le solaire
+   * faible (52 < ON) ne suffit plus -> combustion. */
+  reglerTsec(37.0f);
+  rafraichirCapteurs();
+  verifier(!regime_chaud, "T_sec < 40 - 2,5 : regime FROID");
+  verifier(etat_courant == ETAT_MODE_H2, "FROID + soleil sous ON -> combustion");
+}
+
+/* --------------------------------------------------------------------------
+ *  CAS 18 — Flamme vue alors que le gaz est ferme -> URGENCE (V3)
+ * ------------------------------------------------------------------------*/
+static void cas_flamme_parasite() {
+  ouvrirCas("18. Flamme detectee gaz ferme : URGENCE apres le delai d'extinction");
+  initBanc();
+  reglerFlamme(true);                   // gaz ferme (ATTENTE) mais flamme vue
+  avancer(DELAI_FLAMME_PARASITE_MS - 1000);
+  verifier(etat_courant == ETAT_ATTENTE_DEMARRAGE, "avant le delai : pas d'urgence");
+  reglerFlamme(false);
+  avancer(2000);
+  reglerFlamme(true);
+  avancer(DELAI_FLAMME_PARASITE_MS - 1000);
+  verifier(etat_courant == ETAT_ATTENTE_DEMARRAGE, "chrono remis a zero quand la flamme disparait");
+  avancer(2000);
+  verifier(etat_courant == ETAT_URGENCE_ATEX, "flamme persistante gaz ferme -> URGENCE");
+  verifier(cause_urgence == URG_FLAMME_PARASITE, "cause = FLAMME PARASITE");
+
+  appuyer(PIN_BTN_REARM);
+  verifier(etat_courant == ETAT_URGENCE_ATEX, "rearmement refuse tant que la flamme est vue");
+  reglerFlamme(false);
+  uneIteration();
+  appuyer(PIN_BTN_REARM);
+  verifier(etat_courant == ETAT_ATTENTE_DEMARRAGE, "rearmement accepte flamme eteinte");
+}
+
+/* --------------------------------------------------------------------------
+ *  CAS 19 — Grandeurs FIXES (fonctionnement degrade) (V3)
+ * ------------------------------------------------------------------------*/
+static void cas_valeurs_fixes() {
+  ouvrirCas("19. Grandeurs AUTO / FIXE : la valeur saisie remplace la mesure");
+  initBanc();
+  reglerHsec(90.0f);
+  reglerTamb(25.0f);
+  rafraichirCapteurs();
+  verifierEgalFloat(H_sec, 90.0f, "AUTO : H_sec mesuree");
+  verifierEgalFloat(T_cap, 45.0f, "AUTO : T_cap = T_amb mesuree + DeltaT_Sol");
+
+  Config.Fixe_H_sec = true;  Config.Val_H_sec = 20.0f;
+  Config.Fixe_T_amb = true;  Config.Val_T_amb = 40.0f;
+  Config.Fixe_Press = true;  Config.Val_Press = 0.0f;
+  rafraichirCapteurs();
+  verifierEgalFloat(H_sec, 20.0f, "FIXE : H_sec = valeur saisie malgre le capteur");
+  verifierEgalFloat(T_amb, 40.0f, "FIXE : T_amb = valeur saisie");
+  verifierEgalFloat(T_cap, 60.0f, "T_cap estimee sur la T_amb fixe");
+  verifierEgalFloat(Press_H2, 0.0f, "FIXE : pression saisie");
+}
+
+/* --------------------------------------------------------------------------
+ *  CAS 20 — Palier IMPOSE (remplace un T_sec fixe, interdit) (V3)
+ * ------------------------------------------------------------------------*/
+static void cas_palier_impose() {
+  ouvrirCas("20. Palier impose : pas de regulation par T_sec, surchauffe active");
+  initBanc();
+  Config.Regul_Auto = false;
+  Config.Palier_Impose = PALIER_33;
+  appuyer(PIN_BTN_START);
+  verifier(palier == PALIER_33, "allumage au palier impose");
+  avancer(purgeMs() + 200);
+  reglerFlamme(true);
+  uneIteration();
+  verifier(phase_combustion == PH_PALIER_33, "combustion au palier impose 33 %");
+
+  reglerTsec(60.0f);                    // au-dessus de T3 : en auto on couperait
+  rafraichirCapteurs();
+  verifier(palier == PALIER_33, "palier impose maintenu malgre T_sec > T_cible");
+
+  reglerTsec(91.0f);
+  rafraichirCapteurs();
+  verifier(etat_courant == ETAT_SECHAGE_TERMINE, "securite surchauffe toujours active");
+  verifier(!EV1 && !EV2 && !EV3 && !V_H2 && !V_But, "gaz ferme");
+}
+
+/* --------------------------------------------------------------------------
+ *  CAS 21 — T_cible modifiee en cours de cycle + Periode_Regul (V3)
+ * ------------------------------------------------------------------------*/
+static void cas_tcible_en_cycle_et_periode() {
+  ouvrirCas("21. T_cible modifiable en cycle (UP/DOWN) ; periode de regulation");
+  initBanc();
+  demarrerEtAllumer();
+  verifierEgalFloat(T3, 55.0f, "T3 initial = T_cible 55");
+  appuyer(PIN_BTN_UP);
+  verifierEgalFloat(Config.T_cible, 56.0f, "UP en cycle : T_cible +1");
+  verifierEgalFloat(T3, 56.0f, "seuils recalcules immediatement");
+  verifierEgalFloat(Config.T_init, 25.0f, "T_init inchangee (reference du demarrage)");
+
+  Config.Periode_Regul = 10UL;
+  avancer(10000);                       // aligne la prochaine comparaison
+  reglerTsec(40.0f);
+  avancer(3000);
+  verifier(palier == PALIER_100, "entre deux comparaisons : palier inchange");
+  avancer(8000);
+  verifier(palier == PALIER_67, "a la comparaison suivante : 100 % -> 67 %");
 }
 
 /* --------------------------------------------------------------------------
@@ -658,8 +857,44 @@ static void cas_arret_propre() {
 /* --------------------------------------------------------------------------
  *  main
  * ------------------------------------------------------------------------*/
+/* --------------------------------------------------------------------------
+ *  CAS 22 — Bascule H2 -> GPL PENDANT la veille a 0 % (trouve par la
+ *  simulation de reference, tests/simulation_scenarios.cpp) : la veille est
+ *  conservee, on ne rallume JAMAIS a 0 % (aucune EV ouverte + etincelle).
+ * ------------------------------------------------------------------------*/
+static void cas_bascule_pendant_veille() {
+  ouvrirCas("22. Bascule H2 -> GPL pendant la veille 0 % : veille conservee");
+  initBanc();
+  Config.Mode_Auto = true;
+  reglerTcap(20.0f);
+  rafraichirCapteurs();
+  demarrerEtAllumer();
+
+  reglerTsec(58.0f);                   // >= T3 + Hhyst/2 : consigne atteinte
+  avancer(6000);
+  verifier(palier == PALIER_0 && phase_combustion == PH_PURGE, "veille a 0 % etablie");
+  reglerFlamme(false);                 // gaz ferme : plus de flamme
+
+  mockIO.entree_ana[PIN_PRESS_H2] = adcPression(0.5f);   // H2 epuise pendant la veille
+  uneIteration();
+  verifier(Source_Active == SRC_GPL, "bascule vers GPL");
+
+  bool gaz_ouvert = false;
+  for (int i = 0; i < 200; i++) {      // purge de bascule + 10 s, T_sec toujours haute
+    avancer(purgeMs() / 150);
+    gaz_ouvert = gaz_ouvert || V_H2 || V_But || Spark;
+  }
+  verifier(!gaz_ouvert, "aucune ouverture de gaz ni etincelle tant que T_sec >= T3 - Hhyst/2");
+  verifier(phase_combustion == PH_PURGE, "le GPL reste en veille");
+
+  reglerTsec(52.0f);                   // < T3 - Hhyst/2 : la demande revient
+  rafraichirCapteurs();
+  verifier(phase_combustion == PH_ALLUMAGE, "rallumage GPL quand la demande revient");
+  verifier(V_But && !V_H2 && EV3 && !EV2 && !EV1, "rallumage au palier 33 %");
+}
+
 int main() {
-  printf("\n=== BANC DE TESTS — SECHOIR SOLAIRE HYBRIDE v2 (FSM) ===\n\n");
+  printf("\n=== BANC DE TESTS — SECHOIR SOLAIRE HYBRIDE v3 (FSM) ===\n\n");
 
   cas_demarrage_a_froid();
   cas_hysteresis_quatre_niveaux();
@@ -670,13 +905,19 @@ int main() {
   cas_bascule_echouee();
   cas_retour_automatique_gpl_h2();
   cas_fin_de_cycle_verrouillee();
-  cas_fin_temporisation();
-  cas_prolongation_plafonnee();
+  cas_demande_prolongation();
+  cas_duree_max_puis_humidite();
   cas_urgence_et_rearmement();
   cas_mode_solaire_passif();
   cas_verrou_exclusion_mutuelle();
   cas_menu_et_eeprom();
   cas_arret_propre();
+  cas_repere_froid_chaud();
+  cas_flamme_parasite();
+  cas_valeurs_fixes();
+  cas_palier_impose();
+  cas_tcible_en_cycle_et_periode();
+  cas_bascule_pendant_veille();
 
   printf("\n-----------------------------------------------------\n");
   printf("Verifications : %d   Echecs : %d\n", nb_verif, nb_echecs);

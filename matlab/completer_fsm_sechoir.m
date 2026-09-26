@@ -99,7 +99,7 @@ end
 
 function chart = trouverChart(modelName, chartPath)
     chart = [];
-    tous = sfroot.find('-isa', 'Stateflow.Chart');
+    tous = find(sfroot, '-isa', 'Stateflow.Chart');
     for i = 1:numel(tous)
         if strcmp(tous(i).Path, [modelName '/' chartPath])
             chart = tous(i);

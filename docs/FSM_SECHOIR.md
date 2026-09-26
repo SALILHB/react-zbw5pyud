@@ -193,6 +193,8 @@ Exemple chronologique de 3 échecs : purge 0–120 s, allumage 120–124 s (éch
 Étape 1  Fermeture de la source active + des 3 EV (armerPurge(PURGE_BASCULEMENT))
 Étape 2  Purge complète (Temps_Purge) — le PALIER COURANT EST CONSERVÉ (mémoire)
 Étape 3  Fin de purge → ALLUMAGE de la nouvelle source au palier conservé
+         (bascule PENDANT la veille à 0 % : la veille est conservée, rallumage
+         à 33 % seulement quand T_sec < T3 − Hhyst/2 — jamais d'allumage à 0 %)
 Étape 4  Flame=1 → la régulation reprend et applique aussitôt la règle
          d'hystérésis (si T_sec a baissé pendant la purge, le palier remonte)
          Flame=0 → règle normale des 3 essais (compteur remis à 0 à la bascule)
@@ -259,7 +261,7 @@ garantit qu'aucune ligne ne dépasse 20 caractères.
 make -C tests run
 ```
 
-**200 vérifications sur 21 cas**, dont les nouveautés v3 :
+**206 vérifications sur 22 cas**, dont les nouveautés v3 :
 
 | Cas | Exigence couverte |
 |---|---|
@@ -275,6 +277,7 @@ make -C tests run
 | 19 | Grandeurs FIXE : la valeur saisie remplace la mesure, `T_cap` estimée dessus |
 | 20 | Palier imposé maintenu malgré `T_sec`, surchauffe toujours active |
 | 21 | `T_cible` modifiée en cycle (seuils recalculés, `T_init` inchangée) ; `Periode_Regul` respectée |
+| 22 | Bascule H2 → GPL pendant la veille 0 % : pas d'ouverture de gaz ni d'étincelle tant que la demande n'est pas revenue, puis rallumage à 33 % |
 
 **Validé par mutation** : 11 mutations, chacune désactivant une règle v3
 (tolérer la 2e perte de flamme, ignorer la flamme parasite, supprimer le

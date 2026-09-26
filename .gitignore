@@ -2,3 +2,8 @@ node_modules
 tests/test_sechoir
 tests/simulation_cycle
 tests/cycle.csv
+tests/simulation_scenarios
+matlab/captures/
+matlab/slprj/
+*.slxc
+*.asv

@@ -38,8 +38,9 @@
 %     .Parent, puis sf('set',...)) — repli manuel décrit si tout échoue ;
 %   - les opérateurs temporels temporalCount(sec) et duration(...).
 
-function completer_fsm_sechoir(modelName)
+function ok = completer_fsm_sechoir(modelName)
 
+    ok = false;
     if nargin < 1
         modelName = 'Commande_Sechoir_Hybride';
     end
@@ -72,6 +73,7 @@ function completer_fsm_sechoir(modelName)
     ecrireActionsEtats(h);
     ajouterTransitions(chart, h);
     alignerTransitionsManuellesExistantes(chart);
+    ok = true;
 
     fprintf('\n=== Termine. Simulink : clic droit sur le chart -> "Update Chart", ===\n');
     fprintf('=== puis Diagnostic Viewer pour toute erreur residuelle.            ===\n');
@@ -775,8 +777,11 @@ end
 function ajouterTransitionsCombustion(chart, h, sm)
     % gererCombustion() du firmware. Ordre de création = priorité : le
     % contrôle de flamme passe avant la coupure volontaire au palier 0 %.
+    % Veille à 0 % (raison 3 OU palier 3, p. ex. bascule pendant la veille) :
+    % rallumage seulement quand la demande revient, au palier 33 %.
     transition(chart, sm.purge, sm.allumage, ...
-        '[after(Temps_Purge, sec) && (raison_purge ~= 3 || T_sec < T3_seuil - Hhyst/2)]{if raison_purge==3, palier=uint8(2); end}');
+        ['[after(Temps_Purge, sec) && ((raison_purge ~= 3 && palier ~= 3) || T_sec < T3_seuil - Hhyst/2)]' ...
+         '{if raison_purge==3 || palier==3, palier=uint8(2); end}']);
     transition(chart, sm.allumage, sm.regulation, '[Flame==1]{Spark=uint8(0); nb_echecs_allumage=uint16(0);}');
     transition(chart, sm.allumage, sm.purge, ...
         '[after(Temps_Allumage, sec) && Flame==0 && nb_echecs_allumage + 1 < MAX_ECHECS]{nb_echecs_allumage=nb_echecs_allumage+1; raison_purge=uint8(1);}');

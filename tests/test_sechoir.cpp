@@ -857,6 +857,42 @@ static void cas_arret_propre() {
 /* --------------------------------------------------------------------------
  *  main
  * ------------------------------------------------------------------------*/
+/* --------------------------------------------------------------------------
+ *  CAS 22 — Bascule H2 -> GPL PENDANT la veille a 0 % (trouve par la
+ *  simulation de reference, tests/simulation_scenarios.cpp) : la veille est
+ *  conservee, on ne rallume JAMAIS a 0 % (aucune EV ouverte + etincelle).
+ * ------------------------------------------------------------------------*/
+static void cas_bascule_pendant_veille() {
+  ouvrirCas("22. Bascule H2 -> GPL pendant la veille 0 % : veille conservee");
+  initBanc();
+  Config.Mode_Auto = true;
+  reglerTcap(20.0f);
+  rafraichirCapteurs();
+  demarrerEtAllumer();
+
+  reglerTsec(58.0f);                   // >= T3 + Hhyst/2 : consigne atteinte
+  avancer(6000);
+  verifier(palier == PALIER_0 && phase_combustion == PH_PURGE, "veille a 0 % etablie");
+  reglerFlamme(false);                 // gaz ferme : plus de flamme
+
+  mockIO.entree_ana[PIN_PRESS_H2] = adcPression(0.5f);   // H2 epuise pendant la veille
+  uneIteration();
+  verifier(Source_Active == SRC_GPL, "bascule vers GPL");
+
+  bool gaz_ouvert = false;
+  for (int i = 0; i < 200; i++) {      // purge de bascule + 10 s, T_sec toujours haute
+    avancer(purgeMs() / 150);
+    gaz_ouvert = gaz_ouvert || V_H2 || V_But || Spark;
+  }
+  verifier(!gaz_ouvert, "aucune ouverture de gaz ni etincelle tant que T_sec >= T3 - Hhyst/2");
+  verifier(phase_combustion == PH_PURGE, "le GPL reste en veille");
+
+  reglerTsec(52.0f);                   // < T3 - Hhyst/2 : la demande revient
+  rafraichirCapteurs();
+  verifier(phase_combustion == PH_ALLUMAGE, "rallumage GPL quand la demande revient");
+  verifier(V_But && !V_H2 && EV3 && !EV2 && !EV1, "rallumage au palier 33 %");
+}
+
 int main() {
   printf("\n=== BANC DE TESTS — SECHOIR SOLAIRE HYBRIDE v3 (FSM) ===\n\n");
 
@@ -881,6 +917,7 @@ int main() {
   cas_valeurs_fixes();
   cas_palier_impose();
   cas_tcible_en_cycle_et_periode();
+  cas_bascule_pendant_veille();
 
   printf("\n-----------------------------------------------------\n");
   printf("Verifications : %d   Echecs : %d\n", nb_verif, nb_echecs);

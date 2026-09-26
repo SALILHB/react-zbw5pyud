@@ -211,7 +211,7 @@ issues du même état.
 | Source → Destination | Condition | Action |
 |---|---|---|
 | *(défaut)* → `PURGE` | — | — |
-| `PURGE` → `ALLUMAGE` | `after(Temps_Purge,sec) && (raison_purge ~= 3 \|\| T_sec < T3_seuil − Hhyst/2)` | `if raison_purge==3, palier=2; end` |
+| `PURGE` → `ALLUMAGE` | `after(Temps_Purge,sec) && ((raison_purge ~= 3 && palier ~= 3) \|\| T_sec < T3_seuil − Hhyst/2)` | `if raison_purge==3 \|\| palier==3, palier=2; end` — la veille à 0 % est conservée même après une bascule |
 | `ALLUMAGE` → `REGULATION` | `Flame==1` | `Spark=0; nb_echecs=0` |
 | `ALLUMAGE` → `PURGE` | `after(Temps_Allumage,sec) && Flame==0 && nb_echecs+1 < MAX_ECHECS` | `nb_echecs++; raison_purge=1` |
 | `ALLUMAGE` → `ERREUR_COMBUSTION` | `after(Temps_Allumage,sec) && Flame==0 && nb_echecs+1 >= MAX_ECHECS` | `nb_echecs++` |

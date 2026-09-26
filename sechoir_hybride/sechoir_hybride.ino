@@ -1106,7 +1106,11 @@ void gererCombustion(bool utiliseH2) {
       bool purge_ecoulee = (t_boucle - chrono_purge) >= (Config.Temps_Purge * 1000UL);
       if (!purge_ecoulee) break;
 
-      if (raison_purge == PURGE_PALIER_0) {
+      /* palier == PALIER_0 quelle que soit la raison : une bascule H2<->GPL
+       * (ou toute autre purge) survenue PENDANT la veille la conserve. Sans
+       * ce test, l'allumage suivant se ferait à 0 % : vanne source et
+       * étincelle actives, aucune EV de rampe ouverte. */
+      if (raison_purge == PURGE_PALIER_0 || palier == PALIER_0) {
         /* Coupure volontaire (consigne atteinte) : la purge de sécurité est
          * acquise depuis longtemps si T_sec est resté haut ; on ne la
          * réarme PAS à chaque itération (le ventilateur tourne en continu

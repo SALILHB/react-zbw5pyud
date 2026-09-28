@@ -2,7 +2,7 @@
 %
 %   lancer_simulation(1)          scénario 1
 %   lancer_simulation([1 3 8])    plusieurs scénarios
-%   lancer_simulation(1:12)       tous
+%   lancer_simulation(1:12)       les 12 scénarios de base (13:16 : complémentaires)
 %   r = lancer_simulation(5)      renvoie aussi les signaux
 %
 % Pré-requis : construire_modele() exécuté une fois (crée

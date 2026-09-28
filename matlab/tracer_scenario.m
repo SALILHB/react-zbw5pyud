@@ -72,7 +72,8 @@ function fig = tracer_scenario(r)
     ylim([0 115]);
     set(gca, 'YTick', [0 33 67 100]);
     ylabel('Puissance (% Pnom)');
-    legend({'palier de gaz', 'vanne H_2', 'vanne GPL', 'flamme (0/15)'}, 'Location', 'eastoutside');
+    legend({'palier de gaz', 'vanne H_2', 'vanne GPL', lat(['flamme (' char(233) 'chelle ' char(215) '15)'])}, ...
+           'Location', 'eastoutside');
     grid on;
 
     % --- 3. États

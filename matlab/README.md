@@ -20,6 +20,10 @@ Version cible : **MATLAB R2025b** (Simulink + Stateflow).
 | `tracer_scenario.m`, `journal_scenario.m` | Figure à 4 graphes et chronologie d'un scénario |
 | `comparer_scenario.m` | Validation croisée Simulink / firmware |
 | `capturer_modele.m` | Images du modèle et du chart pour le mémoire |
+| `preparer_figures_memoire.m` | Figures complémentaires du mémoire V3 depuis les `.mat` (zoom de régulation, humidité, énergie, écarts de validation) |
+| `capturer_chart_lisible.m` | Vues lisibles du chart (hiérarchie, MODE_H2, PHASE, URGENCE) sur une copie temporaire du modèle |
+| `retracer_scenarios.m` | Retrace les figures de scénario depuis les `.mat`, sans Simulink |
+| `A_FAIRE_DANS_MATLAB.md` | Marche à suivre pour les images manquantes du mémoire V3 |
 | `reference/` | Résultats attendus : firmware réel + même modèle physique (`make -C tests reference`), avec leurs figures (`tracer_references`) |
 | `charger_reference.m`, `tracer_references.m`, `exporter_scenario.m` | Lecture, tracé et export des scénarios de référence |
 | `ancien/` | Première approche (compléter le `.slx` fourni), abandonnée |

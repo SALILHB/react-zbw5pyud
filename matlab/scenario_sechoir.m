@@ -1,6 +1,7 @@
 %% scenario_sechoir.m  —  scénarios de simulation du séchoir hybride
 %
-%   sc = scenario_sechoir(n)      n = 1 .. 12 (tableau 14.4 du mémoire)
+%   sc = scenario_sechoir(n)      n = 1 .. 12 (tableau 14.4 du mémoire),
+%                                 13 .. 16 (scénarios complémentaires, Tableau 6.8 du mémoire V3)
 %
 % Les accents des noms sont écrits par leur code (char(233) = é) pour être
 % corrects quel que soit l'encodage du fichier.
@@ -113,8 +114,36 @@ function sc = scenario_sechoir(n)
             p.Palier_Impose = 0;
             sc.StopTime = 1500;
 
+        % --- Scénarios complémentaires (Tableau 6.8 du mémoire V3)
+        case 13
+            sc.nom = 'Bascule pendant la veille';
+            sc.attendu = 'Press_H2 < 2 bar a 900 s (veille 0 %) : GPL, veille conservee apres la purge, rallumage a 33 % sous 52,5 C';
+            s.Press_H2 = marches([0 8; 900 0.5]);
+            sc.StopTime = 2400;
+
+        case 14
+            sc.nom = 'Flamme parasite';
+            sc.attendu = 'Flamme vue gaz ferme (veille) de 800 a 820 s : URGENCE cause 5 apres 5 s ; rearmement a 900 s';
+            s.Flamme_parasite = marches([0 0; 800 1; 820 0]);
+            s.Btn_Rearm = impulsions(900);
+            sc.StopTime = 1200;
+
+        case 15
+            sc.nom = 'Retour GPL -> H2';
+            sc.attendu = 'Scenario 3, puis Press_H2 = 8 bar a 2000 s (>= 2,5 bar) : retour sur H2 apres purge, palier conserve';
+            s.Press_H2 = marches([0 8; 1250 0.5; 2000 8]);
+            sc.StopTime = 3600;
+
+        case 16
+            sc.nom = [char(193) 'rr' char(234) 't d''urgence'];
+            sc.attendu = 'AU enfonce de 400 a 600 s : URGENCE cause 3 ; rearmement refuse a 500 s, accepte a 700 s ; relance a 800 s';
+            s.AU_Manuel = marches([0 0; 400 1; 600 0]);
+            s.Btn_Rearm = impulsions([500 700]);
+            s.Btn_Start = impulsions([10 800]);
+            sc.StopTime = 1500;
+
         otherwise
-            error('scenario_sechoir:numero', 'Scenario %d inconnu (1 a 12).', n);
+            error('scenario_sechoir:numero', 'Scenario %d inconnu (1 a 16).', n);
     end
     sc.signaux = s;
     sc.param = p;

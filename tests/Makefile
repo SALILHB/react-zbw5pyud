@@ -40,7 +40,12 @@ reference: simulation_scenarios
 	done
 	@echo "Courbes de reference ecrites dans matlab/reference/"
 
+# Etudes E1 a E4 du memoire (firmware reel + modele physique etendu) :
+# lancees depuis MATLAB/Octave par matlab/etudes/simuler_etude.m (moteur 'programme')
+simulation_etudes: simulation_etudes.cpp mocks/Arduino.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) -O2 -o $@ simulation_etudes.cpp mocks/Arduino.cpp
+
 clean:
-	rm -f test_sechoir simulation_cycle cycle.csv simulation_scenarios
+	rm -f test_sechoir simulation_cycle cycle.csv simulation_scenarios simulation_etudes
 
 .PHONY: all run clean simulation reference

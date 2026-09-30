@@ -7,3 +7,4 @@ matlab/captures/
 matlab/slprj/
 *.slxc
 *.asv
+tests/simulation_etudes

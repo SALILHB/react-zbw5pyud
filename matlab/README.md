@@ -23,7 +23,9 @@ Version cible : **MATLAB R2025b** (Simulink + Stateflow).
 | `preparer_figures_memoire.m` | Figures complémentaires du mémoire V3 depuis les `.mat` (zoom de régulation, humidité, énergie, écarts de validation) |
 | `capturer_chart_lisible.m` | Vues lisibles du chart (hiérarchie, MODE_H2, PHASE, URGENCE) sur une copie temporaire du modèle |
 | `retracer_scenarios.m` | Retrace les figures de scénario depuis les `.mat`, sans Simulink |
-| `A_FAIRE_DANS_MATLAB.md` | Marche à suivre pour les images manquantes du mémoire V3 |
+| `A_FAIRE_DANS_MATLAB.md` | Marche à suivre dans MATLAB pour les images et études du mémoire V4 |
+| `RESULTATS_SIMULATION.md` | Chiffres, hypothèses et observations des études D3 et E1 à E4 |
+| `etudes/` | Études E1 à E4 (journée type, modes de conduite, pertes, sensibilité) : `construire_modele_etudes` (copie du modèle), `lancer_etudes`, `etude_E1_sources` … `etude_E4_sensibilite` ; moteur `'simulink'` ou `'programme'` (programme Arduino réel, `tests/simulation_etudes.cpp`) |
 | `reference/` | Résultats attendus : firmware réel + même modèle physique (`make -C tests reference`), avec leurs figures (`tracer_references`) |
 | `charger_reference.m`, `tracer_references.m`, `exporter_scenario.m` | Lecture, tracé et export des scénarios de référence |
 | `ancien/` | Première approche (compléter le `.slx` fourni), abandonnée |

@@ -81,7 +81,7 @@ function construire_modele_etudes(source)
         return;
     end
     save_system(nom, fichier);
-    verifier(dossier);
+    verifier(dossier, source);
     fprintf('=== %s.slx enregistre ===\n', cible);
 end
 
@@ -260,22 +260,44 @@ function journaux(nom)
     journal(nom, get_param([nom '/sc_T_amb'], 'Handle'), 'log_T_amb', [240 560 330 590]);
 end
 
-function verifier(dossier)
-    % Réglages par défaut : mêmes changements de palier que la référence.
+function verifier(dossier, source)
+    % Réglages par défaut : la copie doit reproduire le modèle validé (mêmes
+    % paliers aux mêmes instants, à un pas de calcul près). L'écart au
+    % programme Arduino est donné pour information : il existe déjà entre le
+    % modèle validé et le programme (instants de coupure, environ 1 s par cycle).
     fprintf('  Verification de la copie (reglages par defaut) :\n');
+    if ~bdIsLoaded(source)
+        load_system(fullfile(dossier, [source '.slx']));
+    end
     for n = [1 3 8]
         sc = completer_etude(scenario_sechoir(n));
         r = simuler_etude(sc, 'simulink');
-        ref = charger_reference(n);
         [ta, pa] = changementsPalier(r.t, r.P_gaz);
-        [tb, pb] = changementsPalier(ref.t, ref.P_gaz);
-        if numel(ta) == numel(tb) && all(pa == pb)
-            fprintf('    scenario %d : %d changements, ecart max %.1f s [ok]\n', n, numel(ta), max(abs(ta - tb)));
+        [tb, pb] = paliersModeleValide(source, sc);
+        ref = charger_reference(n);
+        [tc, pc] = changementsPalier(ref.t, ref.P_gaz);
+        if numel(ta) == numel(tb) && all(pa == pb) && max(abs(ta - tb)) <= 0.2
+            etat = '[ok]';
         else
-            fprintf('    scenario %d : %d changements au lieu de %d [A VERIFIER]\n', n, numel(ta), numel(tb));
+            etat = '[A VERIFIER]';
         end
+        info = 'sequence differente';
+        if numel(ta) == numel(tc) && all(pa == pc)
+            info = sprintf('ecart max %.1f s', max(abs(ta - tc)));
+        end
+        fprintf('    scenario %d : %d changements de palier ; copie / modele valide : %d changements, ecart max %.1f s %s ; (programme Arduino : %s)\n', ...
+                n, numel(ta), numel(tb), max([abs(ta(1:min(end, numel(tb))) - tb(1:min(end, numel(ta)))); 0]), ...
+                etat, info);
     end
+    close_system(source, 0);
     fprintf('  (dossier %s)\n', dossier);
+end
+
+function [t, p] = paliersModeleValide(source, sc)
+    appliquer_scenario(source, sc);
+    out = sim(source, 'StopTime', num2str(sc.StopTime), 'ReturnWorkspaceOutputs', 'on');
+    ts = out.get('log_P_gaz');
+    [t, p] = changementsPalier(ts.Time(:), squeeze(double(ts.Data)));
 end
 
 function [t, p] = changementsPalier(t, P)

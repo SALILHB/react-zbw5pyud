@@ -97,6 +97,12 @@ function r = parSimulink(sc)
     end
     appliquer_etude(modele, sc);
     out = sim(modele, 'StopTime', num2str(sc.StopTime), 'ReturnWorkspaceOutputs', 'on');
+    [msg, id] = lastwarn;
+    if ~isempty(id) && contains(lower(msg), 'transport delay')
+        % Retard nul : le bloc passe en transmission directe, sans boucle
+        % algébrique ici (T_sec sort d'un intégrateur). Avertissement masqué.
+        warning('off', id);
+    end
 
     ts = out.get('log_T_sec');
     t = ts.Time(:);

@@ -28,10 +28,24 @@ function construire_modele_etudes(source)
         source = 'Simulation_Sechoir_Hybride';
     end
     cible = 'Etudes_Sechoir';
+    % Dossier matlab/ : celui qui contient le modèle validé, que ce script
+    % soit rangé dans matlab/etudes/ (prévu) ou directement dans matlab/.
     ici = fileparts(mfilename('fullpath'));
-    dossier = fileparts(ici);
-    addpath(ici);
+    dossier = '';
+    for candidat = {fileparts(ici), ici, pwd}
+        if exist(fullfile(candidat{1}, [source '.slx']), 'file')
+            dossier = candidat{1};
+            break;
+        end
+    end
+    if isempty(dossier)
+        error('construire_modele_etudes:modele', ...
+              '%s.slx introuvable (cherche dans %s, %s et %s).', source, fileparts(ici), ici, pwd);
+    end
     addpath(dossier);
+    if exist(fullfile(dossier, 'etudes'), 'dir')
+        addpath(fullfile(dossier, 'etudes'));
+    end
     TE = 0.1;
 
     fprintf('=== Construction de %s (copie de %s) ===\n', cible, source);

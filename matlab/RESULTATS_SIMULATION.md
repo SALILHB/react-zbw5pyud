@@ -5,14 +5,23 @@ Ce fichier sert à rédiger les commentaires `[À COMPLÉTER : commentaire …]`
 main, sauf les postes marqués *estimation* de E3, qui sont calculés sur les
 signaux simulés.
 
-**Moteur utilisé pour les valeurs ci-dessous : « programme ».** C'est le
-programme Arduino réel (`sechoir_hybride.ino`), compilé sur PC, avec le même
-modèle physique que Simulink (`tests/simulation_etudes.cpp`). Ce banc
-reproduit les scénarios validés à l'identique : mêmes changements de palier
-que les références 1, 3 et 8, et écart sur T_sec ≤ 0,0005 °C. La colonne
-« Simulink » se remplit en lançant `lancer_etudes('simulink')` sous MATLAB
-(voir `A_FAIRE_DANS_MATLAB.md`). Les chiffres peuvent alors différer d'un pas
-de calcul (0,1 s), pas davantage.
+**Moteur utilisé pour les valeurs ci-dessous : Simulink** (copie
+`Etudes_Sechoir.slx` du modèle validé, `lancer_etudes('simulink')`). Ce sont
+aussi les valeurs des figures et des tableaux du mémoire.
+
+Les mêmes études ont d'abord été faites avec le **programme Arduino réel**,
+compilé sur PC avec le même modèle physique (`tests/simulation_etudes.cpp`).
+Les deux moteurs concordent :
+- événements de la journée à 1 min près (bascule GPL à 10 h 54 contre 10 h 55) ;
+- temps dans la bande à 1,5 point près ;
+- énergies identiques au centième de kWh ;
+- périodes à 0,1 min près ;
+- puissances moyennes à 7 W près.
+
+La petite différence de chronologie existait déjà dans le modèle validé. Le
+programme coupe le palier environ 1 s plus tard que le chart à chaque cycle de
+veille, soit 14,3 s d'écart cumulé après 1 h au scénario 1. La séquence des
+états et des paliers, elle, est identique.
 
 Comptes rendus complets : `matlab/captures/etudes/resultats_E1.txt` à
 `resultats_E4.txt` (réécrits à chaque exécution).
@@ -57,7 +66,7 @@ Instants mesurés sur le programme Arduino (références `matlab/reference/scena
 - **Stock d'hydrogène m0 = 28 g** (C4, C5), avec Press_H2 = 8 bar × (1 − m/m0).
   La bascule à 2 bar survient après 21,0 g consommés. C1 consomme 22,5 g, dont
   20,6 g avant 10 h. Avec m0 = 28 g, la bascule tombe donc au dernier
-  rallumage de la matinée, à **10 h 55**.
+  rallumage de la matinée, à **10 h 54**.
 - E_sol = énergie solaire reçue **pendant MODE_SOLAIRE** (définition de la
   demande). Dans le modèle, le soleil chauffe aussi la chambre pendant la
   combustion : l'énergie solaire totale reçue sur la journée est donnée à part
@@ -65,14 +74,14 @@ Instants mesurés sur le programme Arduino (références `matlab/reference/scena
 
 | Cas | E_sol (kWh) | E_sol,tot | E_H2 | E_GPL | f_sol | Bande | Rallumages | H2 (g) | GPL (g) | CO2 (kg) | Événement |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| C1 | 0,79 | 1,46 | 0,60 | 0 | 57 % | 76 % | 6 | 22,5 | 0 | 0 | solaire à 11 h 58 ; 38 min sous 45 °C |
-| C2 | 0 | 0,36 | 3,05 | 0 | 0 % | 99 % | 45 | 114,6 | 0 | 0 | jamais de solaire |
+| C1 | 0,79 | 1,46 | 0,60 | 0 | 57 % | 76 % | 6 | 22,5 | 0 | 0 | solaire à 11 h 58 ; 39 min sous 45 °C |
+| C2 | 0 | 0,36 | 3,05 | 0 | 0 % | 100 % | 45 | 114,4 | 0 | 0 | jamais de solaire |
 | C3 | 0,79 | 1,46 | 0 | 0,60 | 57 % | 76 % | 6 | 0 | 59,0 | 0,179 | GPL dès le départ ; solaire à 11 h 58 |
-| C4 | 0,79 | 1,46 | 0,56 | 0,04 | 57 % | 76 % | 7 | 21,0 | 4,0 | 0,012 | bascule GPL à 10 h 55 ; solaire à 11 h 58 |
-| C5 | 0 | 1,46 | 0,56 | 0 | 0 % | 76 % | 9 | 21,0 | 0 | 0 | bascule GPL à 10 h 55 ; **ERREUR_COMBUSTION à 11 h 01** |
+| C4 | 0,79 | 1,46 | 0,56 | 0,04 | 57 % | 76 % | 7 | 21,0 | 4,0 | 0,012 | bascule GPL à 10 h 54 ; solaire à 11 h 58 |
+| C5 | 0 | 1,46 | 0,56 | 0 | 0 % | 76 % | 9 | 21,0 | 0 | 0 | bascule GPL à 10 h 54 ; **ERREUR_COMBUSTION à 11 h 00** |
 | C6 | 1,46 | 1,46 | 0 | 0 | 100 % | 59 % | 0 | 0 | 0 | 0 | solaire seul ; T_max = 55,1 °C |
-| C7 | 0 | 0 | 2,37 | 0 | 0 % | 99 % | 36 | 89,1 | 0 | 0 | sans soleil, H2 seul |
-| C8 | 0,20 | 0,36 | 1,09 | 0 | 15 % | 40 % | 14 | 41,0 | 0 | 0 | solaire à 11 h 58 ; **290 min sous 45 °C** |
+| C7 | 0 | 0 | 2,37 | 0 | 0 % | 100 % | 36 | 89,0 | 0 | 0 | sans soleil, H2 seul |
+| C8 | 0,20 | 0,36 | 1,09 | 0 | 15 % | 40 % | 14 | 41,0 | 0 | 0 | solaire à 11 h 58 ; **291 min sous 45 °C** |
 
 **Observations**
 1. **Passage au solaire à 11 h 58 dans C1.** C'est le moment où T_amb atteint
@@ -83,43 +92,43 @@ Instants mesurés sur le programme Arduino (références `matlab/reference/scena
    au-dessus de 30 °C, donc T_cap estimée ≥ 50 °C (seuil OFF) jusqu'à 18 h. La
    commande reste en solaire alors que l'apport réel baisse : 204 W à 12 h,
    53 W à 17 h. T_sec quitte la bande à 15 h 40,
-   passe sous 45 °C à 17 h 22 et finit à 41,2 °C à 18 h (38 min sous 45 °C dans C1).
+   passe sous 45 °C à 17 h 22 et finit à 41,2 °C à 18 h (39 min sous 45 °C dans C1).
    - Par journée chaude mais couverte (C8), l'effet est plus fort : la commande
      passe au solaire à 11 h 58 avec seulement 51 W d'apport. T_sec tombe
-     sous 45 °C pendant 290 min, et le temps dans la bande chute à 40 %.
+     sous 45 °C pendant 291 min, et le temps dans la bande chute à 40 %.
 3. **Économie due au solaire.** E_gaz(C7) − E_gaz(C1) = 2,37 − 0,60 = 1,77 kWh,
    soit 75 % du gaz de C7. Mais C1 passe 24 % du temps hors de la bande,
-   contre moins de 1 % pour C7 : l'économie se paie en qualité de régulation
+   contre 0,4 % pour C7 : l'économie se paie en qualité de régulation
    l'après-midi.
-4. **H2 épuisé, GPL disponible (C4).** Bascule sur le GPL à 10 h 55 (purge,
+4. **H2 épuisé, GPL disponible (C4).** Bascule sur le GPL à 10 h 54 (purge,
    palier conservé), 4,0 g de GPL (12 g de CO2), puis solaire à 11 h 58. La
    régulation n'est pas affectée (76 % dans la bande, comme C1).
-5. **H2 épuisé, GPL indisponible (C5).** Après la bascule de 10 h 55, les
+5. **H2 épuisé, GPL indisponible (C5).** Après la bascule de 10 h 54, les
    essais d'allumage sur le GPL échouent. Le programme passe en
-   ERREUR_COMBUSTION à 11 h 01 et y reste jusqu'à 18 h, faute d'action de
+   ERREUR_COMBUSTION à 11 h 00 et y reste jusqu'à 18 h, faute d'action de
    l'opérateur : aucun arbitrage de source n'est fait dans cet état (programme,
    lignes 1505 à 1530). Le retour automatique au solaire à midi n'a donc pas
    lieu (E_sol = 0).
    - *Limite du modèle* : P_sol continue de chauffer la chambre dans le modèle
      même quand la ventilation de distribution est arrêtée. La courbe de T_sec
-     de C5 après 11 h 01 est donc optimiste.
+     de C5 après 11 h 00 est donc optimiste.
 
 ---
 
 ## E2 — Commande automatique, conduite manuelle, absence de régulation (§6.6.4)
 
 **Hypothèses** : conditions du scénario 8 (T_amb = 25 °C, T_sec initiale
-25 °C, T_cible = 55 °C), 2 h. M1 = commande du programme. M2 à M4 = pilote
+25 °C, T_cible = 55 °C), 2 h. M1 = commande automatique (chart). M2 à M4 = pilote
 simple (`simuler_pilote.m`), même modèle thermique, purge de 120 s avant chaque
 allumage, START à 10 s.
 
 | Mode | T_max (°C) | Dans la bande | Hors 45–70 °C | Énergie (kWh) | Écart / M1 | Allumages | T_sec > 70 °C dès | ≥ 90 °C dès |
 |---|---|---|---|---|---|---|---|---|
-| M1 automatique | 57,5 | 98 % | 0 min | 0,91 | — | 10 | jamais | jamais |
-| M2a manuel 15 min | 137,4 | 10 % | 62 min | 2,15 | +136 % | 2 | 7,8 min | 10,5 min |
-| M2b manuel 30 min | 210,6 | 1 % | 106 min | 2,33 | +156 % | 1 | 7,8 min | 10,5 min |
-| M3 thermostat TOR | 55,5 | 100 % | 0 min | 0,87 | −5 % | 27 | jamais | jamais |
-| M4 sans régulation (33 %) | 164,9 | 2 % | 99 min | 3,24 | +256 % | 1 | 21,4 min | 32,4 min |
+| M1 automatique | 57,5 | 99,8 % | 0 min | 0,91 | — | 10 | jamais | jamais |
+| M2a manuel 15 min | 137,4 | 10 % | 62 min | 2,15 | +137 % | 2 | 7,8 min | 10,5 min |
+| M2b manuel 30 min | 210,6 | 1 % | 106 min | 2,33 | +157 % | 1 | 7,8 min | 10,5 min |
+| M3 thermostat TOR | 55,5 | 100 % | 0 min | 0,87 | −4 % | 27 | jamais | jamais |
+| M4 sans régulation (33 %) | 164,9 | 2 % | 99 min | 3,24 | +257 % | 1 | 21,4 min | 32,4 min |
 
 **Observations**
 1. À 100 %, la chambre monte d'environ 8 K/min. Avec un relevé toutes les 15
@@ -132,11 +141,11 @@ allumage, START à 10 s.
 2. Sans régulation (M4, 33 % en continu), T_sec dépasse 70 °C à 21 min et
    90 °C à 32 min. Elle tend vers T_amb + 1650 × Kth ≈ 187 °C, et l'énergie
    est 3,6 fois celle de M1.
-3. Le thermostat tout-ou-rien (M3) tient la bande 100 % du temps avec 5 %
+3. Le thermostat tout-ou-rien (M3) tient la bande 100 % du temps avec 4 %
    d'énergie en moins que M1. Il le paie par **27 allumages** en 2 h, contre
    10 pour M1, chacun précédé d'une purge. La commande par paliers de M1
    réduit les cycles de l'allumeur et des électrovannes.
-4. M1 reste dans la bande 98 % du temps et n'en sort jamais au-delà de 57,5 °C.
+4. M1 reste dans la bande 99,8 % du temps et n'en sort jamais au-delà de 57,5 °C.
 
 ---
 
@@ -160,7 +169,7 @@ post-purge) durent **223 min sur les 10 h**.
 | Pertes par les parois | 1,90 | 92 % |
 | Renouvellement d'air, 80 m³/h (estimation) | 1,34 | 65 % |
 | Renouvellement d'air, 200 m³/h (estimation) | 3,35 | 163 % |
-| Air chaud évacué pendant les purges et veilles (estimation) | 5,27 | 257 % |
+| Air chaud évacué pendant les purges et veilles (estimation) | 5,27 | 256 % |
 | Évaporation, cycle complet (estimation) | 6,14 | 299 % |
 | Énergie fournie dans le modèle (gaz + solaire) | 2,06 | 100 % |
 
@@ -191,28 +200,29 @@ seconde heure. Bruit uniforme, une valeur par seconde, avec quantification à
 | Paramètre | Valeur | Amplitude (°C) | Période (min) | Rallumages/h | P̄ (W) | Théorie (1er ordre) |
 |---|---|---|---|---|---|---|
 | UA | 7,1 W/K (−30 %) | 5,0 | 16,2 | 3,3 | 189 | 16,1 min ; 214 W |
-| UA | 10,2 W/K (nominal) | 5,0 | 12,2 | 4,9 | 304 | t_on 134 s, t_off 590 s → 12,1 min ; 306 W |
-| UA | 13,3 W/K (+30 %) | 5,0 | 10,0 | 6,0 | 392 | 10,0 min ; 397 W |
+| UA | 10,2 W/K (nominal) | 5,0 | 12,1 | 4,9 | 302 | t_on 134 s, t_off 590 s → 12,1 min ; 306 W |
+| UA | 13,3 W/K (+30 %) | 5,0 | 10,0 | 6,0 | 397 | 10,0 min ; 397 W |
 | UA + air | 34 W/K (80 m³/h) | 5,0 | 7,8 | 8,0 | 1001 | 7,7 min ; 1019 W |
 | UA + air | 69 W/K (200 m³/h) | — | — | 0 | 1650 | T∞(33 %) = 48,8 °C < 57,5 °C |
-| T_amb | 15 °C | 5,0 | 9,8 | 6,2 | 394 | 9,8 min ; 408 W |
+| T_amb | 15 °C | 5,0 | 9,8 | 6,2 | 401 | 9,8 min ; 408 W |
 | T_amb | 35 °C (réglages par défaut) | — | — | 0 | 0 | passage en solaire |
 | T_amb | 35 °C (Marge_Sol = 20 °C) | 5,0 | 16,9 | 3,2 | 183 | — |
-| C_eq | × 2 | 5,0 | 24,2 | 2,3 | 290 | 24,1 min ; 306 W |
-| Retard de mesure | 10 s | 5,5 | 13,2 | 4,4 | 294 | dépassement 0,37 °C |
-| Retard de mesure | 30 s | 6,4 | 15,2 | 3,8 | 298 | 1,10 °C |
-| Retard de mesure | 60 s | 7,7 | 18,1 | 3,2 | 308 | 2,20 °C |
-| Bruit | ± 0,25 °C | 5,0 | 11,6 | 4,9 | 289 | — |
-| Bruit | ± 0,5 °C | 4,6 | 10,4 | 5,5 | 289 | — |
+| C_eq | × 2 | 5,0 | 24,1 | 2,3 | 289 | 24,1 min ; 306 W |
+| Retard de mesure | 10 s | 5,5 | 13,1 | 4,4 | 292 | dépassement 0,37 °C |
+| Retard de mesure | 30 s | 6,4 | 15,2 | 3,8 | 299 | 1,10 °C |
+| Retard de mesure | 60 s | 7,7 | 18,2 | 3,2 | 309 | 2,20 °C |
+| Bruit | ± 0,25 °C | 4,9 | 11,5 | 4,9 | 287 | — |
+| Bruit | ± 0,5 °C | 4,8 | 10,4 | 5,5 | 291 | — |
 
 **Observations**
-1. **Accord avec les formules du mémoire.** La période simulée (12,2 min)
-   correspond à t_on + t_off théoriques (134 + 590 s = 12,1 min), à 1 % près,
-   pour UA, T_amb et C_eq. L'amplitude reste égale à Hhyst = 5 °C tant qu'il
+1. **Accord avec les formules du mémoire.** La période simulée (12,1 min)
+   est égale à t_on + t_off théoriques (134 + 590 s = 12,1 min). L'accord est
+   à 1 % près pour les variantes de UA, T_amb et C_eq (P̄ : 302 W simulés,
+   306 W théoriques). L'amplitude reste égale à Hhyst = 5 °C tant qu'il
    n'y a ni retard ni bruit.
-2. **Retard de mesure.** Le dépassement haut simulé vaut 0,40 / 1,13 / 2,21 °C
+2. **Retard de mesure.** Le dépassement haut simulé vaut 0,40 / 1,13 / 2,22 °C
    pour 10 / 30 / 60 s, contre pente × retard = 0,0366 K/s × retard =
-   0,37 / 1,10 / 2,20 °C. Le dépassement bas reste petit (0,09 à 0,47 °C), car
+   0,37 / 1,10 / 2,20 °C. Le dépassement bas reste petit (0,08 à 0,46 °C), car
    la pente de refroidissement est 4,7 fois plus faible. À 60 s, T_sec monte à
    59,7 °C et l'amplitude passe de 5,0 à 7,7 °C.
 3. **Renouvellement d'air élevé (69 W/K).** Le palier 33 % ne suffit plus
@@ -227,11 +237,11 @@ seconde heure. Bruit uniforme, une valeur par seconde, avec quantification à
    ce cas), et T_sec reste à 35 °C. C'est la même limite de l'estimation que
    dans E1.
 5. **Bruit de mesure.** À ± 0,5 °C, les basculements surviennent plus tôt :
-   l'amplitude passe à 4,6 °C et les rallumages à 5,5/h au lieu de 4,9. La
-   puissance moyenne ne change pas (289 W).
+   l'amplitude passe à 4,8 °C et les rallumages à 5,5/h au lieu de 4,9. La
+   puissance moyenne ne change presque pas (291 W contre 302 W).
 6. **Ouverture de porte** (UA × 10 de 1800 à 1860 s, pendant une veille) :
    - T_sec passe de 53,4 à 51,0 °C (chute de 2,4 °C) ;
-   - T_sec franchit 52,5 °C et la commande rallume à 33 % à **1812 s** (12 s
+   - T_sec franchit 52,5 °C et la commande rallume à 33 % à **1811 s** (11 s
      après l'ouverture) ;
-   - T_sec revient dans la bande à **1900 s**, 100 s après l'ouverture ;
+   - T_sec revient dans la bande à **1899 s**, 99 s après l'ouverture ;
    - seuls les paliers 0 et 33 % sont utilisés.

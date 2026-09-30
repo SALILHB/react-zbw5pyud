@@ -84,9 +84,12 @@ end
 
 function thermique(nom, TE)
     sys = [nom '/MODELE_THERMIQUE'];
+    % Une ligne ramifiée est supprimée avec ses branches : on redemande la
+    % liste après chaque suppression (les anciens identifiants deviennent invalides).
     lignes = find_system(sys, 'SearchDepth', 1, 'FindAll', 'on', 'Type', 'line');
-    for k = 1:numel(lignes)
-        delete_line(lignes(k));
+    while ~isempty(lignes)
+        delete_line(lignes(1));
+        lignes = find_system(sys, 'SearchDepth', 1, 'FindAll', 'on', 'Type', 'line');
     end
     delete_block([sys '/Kth']);
     delete_block([sys '/Somme']);

@@ -135,7 +135,7 @@ function sc = scenario_sechoir(n)
             sc.StopTime = 3600;
 
         case 16
-            sc.nom = [char(193) 'rr' char(234) 't d''urgence'];
+            sc.nom = ['Arr' char(234) 't d''urgence'];
             sc.attendu = 'AU enfonce de 400 a 600 s : URGENCE cause 3 ; rearmement refuse a 500 s, accepte a 700 s ; relance a 800 s';
             s.AU_Manuel = marches([0 0; 400 1; 600 0]);
             s.Btn_Rearm = impulsions([500 700]);

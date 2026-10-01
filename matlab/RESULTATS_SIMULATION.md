@@ -44,14 +44,14 @@ Comptes rendus complets : `matlab/captures/etudes/resultats_E1.txt` à
 
 Instants mesurés sur le programme Arduino (références `matlab/reference/scenario_13..16.csv`).
 
-| N° | Réglage | Résultat du programme | Simulink (à relever) |
+| N° | Réglage | Résultat du programme | Simulink |
 |---|---|---|---|
-| 13 | `Press_H2` : 8 → 0,5 bar à 900 s, pendant la veille commencée à 597 s | GPL à 900 s ; **aucune ouverture de gaz** tant que T_sec > 52,5 °C ; rallumage GPL à **33 % à 1189 s** | |
-| 14 | Flamme vue gaz fermé de 800 à 820 s (veille) ; réarmement à 900 s | **URGENCE à 805 s** (cause 5) ; retour à ATTENTE à 900 s | |
-| 15 | Comme le scénario 3 (GPL à 1250 s), puis `Press_H2` = 8 bar à 2000 s | rallumage GPL à 33 % à 1370 s ; **retour sur H2 à 2000 s** ; rallumage H2 à **33 % à 2120 s** | |
-| 16 | AU enfoncé de 400 à 600 s ; réarmement à 500 et 700 s ; START à 800 s | **URGENCE à 400 s** (cause 3) ; réarmement **refusé à 500 s**, **accepté à 700 s** ; allumage à 100 % à 920 s | |
+| 13 | `Press_H2` : 8 → 0,5 bar à 900 s, pendant la veille commencée à 597 s | GPL à 900 s ; **aucune ouverture de gaz** tant que T_sec > 52,5 °C ; rallumage GPL à **33 % à 1189 s** | GPL à 900,1 s ; rallumage GPL à 33 % à 1189,2 s |
+| 14 | Flamme vue gaz fermé de 800 à 820 s (veille) ; réarmement à 900 s | **URGENCE à 805 s** (cause 5) ; retour à ATTENTE à 900 s | URGENCE à 805,0 s ; ATTENTE à 900,0 s |
+| 15 | Comme le scénario 3 (GPL à 1250 s), puis `Press_H2` = 8 bar à 2000 s | rallumage GPL à 33 % à 1370 s ; **retour sur H2 à 2000 s** ; rallumage H2 à **33 % à 2120 s** | GPL à 1250,1 s ; 33 % à 1370,0 s ; H2 à 2000,1 s ; 33 % à 2120,0 s |
+| 16 | AU enfoncé de 400 à 600 s ; réarmement à 500 et 700 s ; START à 800 s | **URGENCE à 400 s** (cause 3) ; réarmement **refusé à 500 s**, **accepté à 700 s** ; allumage à 100 % à 920 s | URGENCE à 400,0 s ; ATTENTE à 700,0 s ; 100 % à 920,0 s |
 
-Écart Simulink / programme attendu : 0,1 s (à confirmer avec `comparer_scenario(13:16)`).
+Écart Simulink / programme sur les changements d'état (`comparer_scenario(13:16)`) : **0,1 s au plus** pour les quatre scénarios ; T_sec max 57,5 °C dans les deux cas.
 
 ---
 

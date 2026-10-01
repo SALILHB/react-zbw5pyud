@@ -226,9 +226,12 @@ seconde heure. Bruit uniforme, une valeur par seconde, avec quantification à
    la pente de refroidissement est 4,7 fois plus faible. À 60 s, T_sec monte à
    59,7 °C et l'amplitude passe de 5,0 à 7,7 °C.
 3. **Renouvellement d'air élevé (69 W/K).** Le palier 33 % ne suffit plus
-   (T∞ = 48,8 °C). La commande par paliers **ne remonte pas à 67 %** : les
-   paliers ne font que descendre (100 → 67 → 33 %). T_sec **plafonne à
-   48,8 °C**, sous la bande, sans alarme.
+   (T∞ = 48,8 °C). La commande **reste à 33 %** : `majPalier()` ne repasse à
+   67 % que si T_sec descend sous T2 − Hhyst/2, soit **42,5 °C** pour un
+   démarrage à 25 °C (seuil fixé au démarrage, 10 °C sous la bande). T_sec
+   **plafonne à 48,8 °C**, entre ce seuil et la bande, sans alarme.
+   *(Correction : une version précédente disait à tort que les paliers « ne
+   font que descendre ».)*
    - À 34 W/K (80 m³/h), la régulation fonctionne encore, avec une chauffe
      plus longue que la veille (t_on 286 s > t_off 177 s) et 8 rallumages par
      heure.

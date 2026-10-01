@@ -23,6 +23,8 @@ Version cible : **MATLAB R2025b** (Simulink + Stateflow).
 | `preparer_figures_memoire.m` | Figures complémentaires du mémoire V3 depuis les `.mat` (zoom de régulation, humidité, énergie, écarts de validation) |
 | `capturer_chart_lisible.m` | Vues lisibles du chart (hiérarchie, MODE_H2, PHASE, URGENCE) sur une copie temporaire du modèle |
 | `retracer_scenarios.m` | Retrace les figures de scénario depuis les `.mat`, sans Simulink |
+| `outils/schemas_chart.py` | Vues lisibles de MODE_H2, de la région PHASE et de URGENCE_ATEX (A2 à A4) : schéma et conditions exactes du chart (`python3 schemas_chart.py dossier`) |
+| `rassembler_figures_memoire.m` | Range toutes les images et tableaux produits sous les noms attendus par `memoire_V4_latex` |
 | `A_FAIRE_DANS_MATLAB.md` | Marche à suivre dans MATLAB pour les images et études du mémoire V4 |
 | `RESULTATS_SIMULATION.md` | Chiffres, hypothèses et observations des études D3 et E1 à E4 |
 | `etudes/` | Études E1 à E4 (journée type, modes de conduite, pertes, sensibilité) : `construire_modele_etudes` (copie du modèle), `lancer_etudes`, `etude_E1_sources` … `etude_E4_sensibilite` ; moteur `'simulink'` ou `'programme'` (programme Arduino réel, `tests/simulation_etudes.cpp`) |

@@ -16,7 +16,36 @@ test_sechoir: $(SOURCES) $(HEADERS)
 run: test_sechoir
 	./test_sechoir
 
-clean:
-	rm -f test_sechoir
+# Cycle complet : firmware reel + modele thermique illustratif -> cycle.csv
+simulation_cycle: simulation_cycle.cpp mocks/Arduino.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) -o $@ simulation_cycle.cpp mocks/Arduino.cpp
 
-.PHONY: all run clean
+simulation: simulation_cycle
+	./simulation_cycle > cycle.csv
+	@echo "cycle.csv ecrit (t_min, T_sec, palier_pct, etat, H_sec, H_fin)"
+
+# Courbes de reference des 16 scenarios Simulink (firmware reel + meme modele
+# physique) -> ../matlab/reference/scenario_NN.csv. Necessite Octave ou MATLAB
+# (matlab/exporter_scenario.m) ; OCTAVE=... pour changer d'interpreteur.
+OCTAVE ?= octave-cli
+simulation_scenarios: simulation_scenarios.cpp mocks/Arduino.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) -o $@ simulation_scenarios.cpp mocks/Arduino.cpp
+
+reference: simulation_scenarios
+	mkdir -p ../matlab/reference
+	for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do \
+	  f=$$(printf '../matlab/reference/scenario_%02d' $$n); \
+	  $(OCTAVE) --no-gui --quiet --eval "addpath('../matlab'); exporter_scenario($$n, '$$f.txt')" && \
+	  ./simulation_scenarios $$f.txt > $$f.csv && rm -f $$f.txt || exit 1; \
+	done
+	@echo "Courbes de reference ecrites dans matlab/reference/"
+
+# Etudes E1 a E4 du memoire (firmware reel + modele physique etendu) :
+# lancees depuis MATLAB/Octave par matlab/etudes/simuler_etude.m (moteur 'programme')
+simulation_etudes: simulation_etudes.cpp mocks/Arduino.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) -O2 -o $@ simulation_etudes.cpp mocks/Arduino.cpp
+
+clean:
+	rm -f test_sechoir simulation_cycle cycle.csv simulation_scenarios simulation_etudes
+
+.PHONY: all run clean simulation reference

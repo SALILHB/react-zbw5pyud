@@ -78,10 +78,9 @@ DOSSIER_TUTEUR_Memoire_V5.1/
     |-- matlab/                 modèle Simulink/Stateflow, scénarios, études
     |   |-- Simulation_Sechoir_Hybride.slx   modèle (construit par script)
     |   |-- Etudes_Sechoir.slx               copie étendue pour E1 à E4
+    |   |-- *.m                              11 scripts de simulation
     |   |-- etudes/                          études E1 à E4
-    |   |-- reference/                       résultats du programme Arduino
-    |   |-- resultats_etudiant_R2025b/       figures obtenues par l'auteur
-    |   `-- RESULTATS_SIMULATION.md          chiffres des études
+    |   `-- reference/                       résultats du programme Arduino
     `-- docs/                   spécification de la machine à états
 \end{Verbatim}
 
@@ -115,7 +114,7 @@ Python 3 + matplotlib & régénérer trois schémas du chart (facultatif) \\
 \item MATLAB : \code{construire_modele}, puis \code{lancer_simulation(1:16)} (§\ref{sec:scenarios}).
 \item MATLAB : \code{comparer_scenario(1)}, \code{comparer_scenario(9)} (§\ref{sec:croisee}).
 \item MATLAB : \code{construire_modele_etudes}, puis \code{lancer_etudes('simulink')} (§\ref{sec:etudes}).
-\item Comparer les figures obtenues avec \code{resultats_etudiant_R2025b/} et le mémoire (§\ref{sec:correspondance}).
+\item Comparer les figures obtenues dans \code{captures/} avec celles du mémoire (§\ref{sec:correspondance}).
 \end{enumerate}
 
 %======================================================================
@@ -390,32 +389,6 @@ le chart décide toutes les 0,1~s. Ce point est discuté au §6.5.9 du mémoire 
 il ne change ni la suite des états ni les paliers atteints.
 \end{remarque}
 
-\subsection{Figures complémentaires du chapitre 6 (moins d'une minute)}
-
-\begin{commande}
-\begin{Verbatim}
->> preparer_figures_memoire       % lit captures/scenario_NN.mat, sans Simulink
-\end{Verbatim}
-\end{commande}
-
-\begin{attendu}
-Fichiers \code{captures/memoire/} : \code{zoom_regulation.png},
-\code{humidite_fin_cycle.png}, \code{energie_scenarios.png} et \code{.csv},
-\code{ecarts_validation.png} et \code{.csv}. Valeurs de contrôle affichées :
-\begin{itemize}[nosep]
-\item scénario 1, première heure : \textbf{599~W} (attendu $\approx$ 600~W) ;
-\item scénario 8, jusqu'à la demande (7210~s) : \textbf{453~W, 0,91~kWh} ;
-\item \code{ecarts_validation.csv} : 0,1~s partout, 0,6~s pour le scénario 12.
-\end{itemize}
-\end{attendu}
-
-Images du modèle et du chart (facultatif) : \code{capturer_modele} (modèle
-global, sous-systèmes, chart complet) et \code{capturer_chart_lisible}
-(hiérarchie du chart). Les trois zooms du chart (\code{MODE_H2}, région
-\code{PHASE}, \code{URGENCE_ATEX}) sont produits par
-\code{python3 outils/schemas_chart.py captures/memoire}. Les vues « animation »
-(état actif surligné) sont des captures d'écran prises pendant la simulation.
-
 \subsection{Études complémentaires E1 à E4 (environ 4 minutes)}
 \label{sec:etudes}
 
@@ -459,48 +432,57 @@ Les mêmes études peuvent être rejouées avec le \textbf{programme Arduino ré
 l'étude E2 (conduite manuelle, absence de régulation) n'utilisent pas la
 commande et sont calculés par \code{simuler_pilote.m}.
 
-\subsection{Comparer avec les résultats de l'auteur}
-
-Le dossier \code{matlab/resultats_etudiant_R2025b/} contient les sorties
-obtenues par l'auteur sous MATLAB R2025b :
-\begin{itemize}[nosep]
-\item \code{scenarios/} : \code{scenario_01..16.png}, \code{comparaison_01..16.png}, images du modèle ;
-\item \code{memoire/} : figures complémentaires, vues du chart, captures d'animation, fichiers \code{.csv} ;
-\item \code{etudes/} : \code{resultats_E1..E4.txt}, figures et tableaux LaTeX des études.
-\end{itemize}
-Les figures que vous produisez dans \code{captures/} doivent leur être
-identiques (aux détails de mise en page près). Les fichiers \code{.mat} n'ont
-pas été joints (taille) : ils sont recréés par \code{lancer_simulation}.
-
-\subsection{Correspondance figures du mémoire / scripts}
+\subsection{Comparer avec le mémoire}
 \label{sec:correspondance}
 
+Les figures produites dans \code{captures/} doivent être identiques (aux détails
+de mise en page près) à celles du mémoire :
+
 \small
-\begin{longtable}{@{}p{6.3cm}p{4.3cm}p{4.6cm}@{}}
+\begin{longtable}{@{}p{6.0cm}p{3.6cm}p{5.4cm}@{}}
 \toprule
-\textbf{Fichier dans \code{Figures/}} & \textbf{Section du mémoire} & \textbf{Produit par} \\
+\textbf{Figure du mémoire (\code{Figures/})} & \textbf{Section} & \textbf{Commande} \\
 \midrule
-\code{simulink/modele_global.png}, \code{modele_fsm.png}, \code{modele_thermique.png} & 5.4 Architecture & \code{capturer_modele} \\
-\code{simulink/chart_hierarchie.png} & 5.5.1 Hiérarchie & \code{capturer_chart_lisible} \\
-\code{simulink/chart_mode_h2.png}, \code{chart_region_phase.png}, \code{chart_urgence.png} & 5.5 Le chart & \code{outils/schemas_chart.py} \\
 \code{simulink/scenario_01..12.png} & 6.5.2 à 6.5.7 & \code{lancer_simulation(n)} \\
-\code{simulink/anim_*.png} & 6.5.8 État actif & capture d'écran pendant la simulation \\
-\code{simulink/comparaison_NN.png} & 6.5.9 et annexe E & \code{comparer_scenario(n)} \\
-\code{simulink/zoom_regulation.png} ; \code{humidite_fin_cycle.png} ; \code{energie_scenarios.png}, \code{ecarts_validation.png} & 6.5.2 ; 6.5.6 ; 6.5.9 & \code{preparer_figures_memoire} \\
-\code{simulink/scenario_13..16.png} & 6.5.11 et annexe E & \code{lancer_simulation(13:16)} \\
-\code{reference/scenario_NN_firmware.png} & 6.5.11, annexe E & \code{tracer_references} \\
-\code{simulation/profil_journee.png}, \code{energie_sources.png}, \code{tsec_sources.png}, \code{tables/tab_sources.tex}, \code{tab_consommation.tex} & 6.6.2, 6.6.3 & étude E1 \\
-\code{simulation/modes_tsec.png}, \code{modes_energie.png}, \code{tables/tab_modes.tex} & 6.6.4 & étude E2 \\
-\code{simulation/bilan_pertes.png}, \code{tables/tab_pertes.tex} & 6.6.5 & étude E3 \\
-\code{simulation/sensibilite_retard.png}, \code{perturbation_porte.png}, \code{tables/tab_sensibilite.tex} & 6.6.6 & étude E4 \\
-Figures 5.1 à 5.11 (racine de \code{Figures/}) & 6.4 Boucle fermée & données des bancs \code{tests/} (programme réel en boucle fermée) \\
-\code{5.0_banc_tests_terminal.png} & 6.3 Banc de tests & sortie de \code{make run} \\
+\code{simulink/scenario_13..16.png} & 6.5.11, annexe E & \code{lancer_simulation(13:16)} \\
+\code{simulink/comparaison_NN.png} & 6.5.9, annexe E & \code{comparer_scenario(n)} \\
+\code{simulation/profil_journee.png}, \code{energie_sources.png}, \code{tsec_sources.png} ; tableaux \code{tab_sources}, \code{tab_consommation} & 6.6.2, 6.6.3 & étude E1 \\
+\code{simulation/modes_tsec.png}, \code{modes_energie.png} ; tableau \code{tab_modes} & 6.6.4 & étude E2 \\
+\code{simulation/bilan_pertes.png} ; tableau \code{tab_pertes} & 6.6.5 & étude E3 \\
+\code{simulation/sensibilite_retard.png}, \code{perturbation_porte.png} ; tableau \code{tab_sensibilite} & 6.6.6 & étude E4 \\
 \bottomrule
 \end{longtable}
 \normalsize
 
-Les tableaux de résultats du §6.6 (\code{Figures/simulation/tables/*.tex}) sont
-écrits directement par les études et lus par le mémoire sans recopie manuelle.
+Les tableaux de résultats du §6.6 sont écrits directement par les études
+(dans \code{captures/etudes/}) et lus par le mémoire
+sans recopie manuelle. Les autres images du chapitre~5 (vues du modèle et du
+chart) et les captures d'écran de l'animation Stateflow (§6.5.8) s'obtiennent
+en ouvrant le modèle : \code{open_system('Simulation_Sechoir_Hybride')}.
+
+\subsection{Contenu du dossier \texttt{matlab}}
+
+Seuls les fichiers nécessaires à la simulation sont joints :
+
+\small
+\footnotesize
+\begin{longtable}{@{}p{6.4cm}>{\raggedright\arraybackslash}p{9.0cm}@{}}
+\toprule
+\textbf{Fichier} & \textbf{Rôle} \\
+\midrule
+\code{Simulation_Sechoir_Hybride.slx} & modèle Simulink/Stateflow (construit par \code{construire_modele}) \\
+\code{Etudes_Sechoir.slx} & copie étendue pour les études (construite par \code{construire_modele_etudes}) \\
+\code{construire_modele.m} & construit le modèle à partir de zéro : chart, câblage, modèle physique, solveur \\
+\code{scenario_sechoir.m}, \code{appliquer_scenario.m} & définition des 16 scénarios et chargement dans le modèle \\
+\code{lancer_simulation.m} & simule, affiche la chronologie, enregistre figure et \code{.mat} \\
+\code{tracer_scenario.m}, \code{journal_scenario.m}, \code{alleger_resultat.m} & tracé, chronologie des états, réduction des résultats \\
+\code{comparer_scenario.m}, \code{charger_reference.m} & validation croisée avec le programme Arduino \\
+\code{exporter_figure.m}, \code{taille_figure.m} & export PNG 300 dpi des figures \\
+\code{reference/scenario_NN.csv} & résultats du programme Arduino réel sur les 16 scénarios \\
+\code{etudes/} (23 fichiers) & études E1 à E4 : \code{lancer_etudes}, \code{construire_modele_etudes}, \code{etude_E1_sources} \dots{} \code{etude_E4_sensibilite} et fonctions associées \\
+\bottomrule
+\end{longtable}
+\normalsize
 
 \subsection{Difficultés possibles}
 
@@ -510,8 +492,7 @@ Les tableaux de résultats du §6.6 (\code{Figures/simulation/tables/*.tex}) son
   \code{2_Projet/} ont été séparés.
 \item \textbf{Image PNG noire} (raté de rendu graphique observé sous R2025b) :
   \code{exporter_figure} la réexporte automatiquement avec le moteur
-  \code{painters} ; sinon relancer \code{retracer_scenarios}, qui retrace les
-  figures depuis les \code{.mat} sans resimuler.
+  \code{painters} ; sinon relancer \code{lancer_simulation(n)}.
 \item \textbf{Avertissement sur le cache} : un dossier \code{slprj/} et des
   fichiers \code{.slxc} sont créés à la première simulation ; ils peuvent être
   supprimés sans risque.
@@ -567,7 +548,8 @@ Compilation pour ATmega2560 (avr-gcc 7.3.0, cœur Arduino AVR, bibliothèques du
 Banc de tests natif depuis ce dossier (\code{make run}) & 206 vérifications, 0 échec \\
 Compilation des bancs \code{simulation_scenarios} et \code{simulation_etudes} & sans erreur \\
 Compilation du mémoire (XeLaTeX + BibTeX) & 179 pages, sans erreur \\
-Simulations MATLAB R2025b & exécutées par l'auteur (résultats joints) \\
+Dossier \code{matlab} réduit : scénarios, références et étude E1 (moteur programme, GNU Octave) & valeurs du mémoire retrouvées \\
+Simulations Simulink sous MATLAB R2025b & exécutées par l'auteur \\
 \bottomrule
 \end{tabularx}
 

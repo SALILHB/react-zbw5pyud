@@ -19,7 +19,7 @@ Dans MATLAB, *Current Folder* → aller dans `matlab/` (ou taper
 | Fichier | Rôle |
 |---|---|
 | `construire_modele.m` | construit le modèle complet à partir de zéro (chart Stateflow + modèle physique) |
-| `scenario_sechoir.m` | les 12 scénarios (boutons, consignes, défauts, paramètres) |
+| `scenario_sechoir.m` | les 16 scénarios (boutons, consignes, défauts, paramètres) |
 | `lancer_simulation.m` | simule, affiche la chronologie, enregistre les figures |
 | `comparer_scenario.m` | compare Simulink à la référence du firmware |
 | `capturer_modele.m` | exporte les images du modèle et du chart |
@@ -80,7 +80,7 @@ reconstruit tout.
 
 ```matlab
 lancer_simulation(1)        % un scénario
-lancer_simulation(1:12)     % les douze (quelques minutes)
+lancer_simulation(1:16)     % les seize (quelques minutes)
 ```
 
 Pour chaque scénario, la fenêtre de commande affiche la **chronologie**
@@ -116,7 +116,7 @@ normaux : le firmware lit les sondes une fois par seconde, Simulink tous les
 
 ```matlab
 comparer_scenario(1)
-for n = 1:12, comparer_scenario(n); end
+for n = 1:16, comparer_scenario(n); end
 ```
 
 Superpose T_sec et l'état **Simulink** (trait plein) et **firmware** (tirets),

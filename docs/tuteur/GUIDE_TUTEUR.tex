@@ -1,0 +1,574 @@
+% Guide de vérification destiné au tuteur du mémoire
+% Compilation : xelatex GUIDE_TUTEUR (deux fois)
+\documentclass[11pt,a4paper]{article}
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{french}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{xcolor}
+\usepackage{tabularx,booktabs,longtable,array}
+\usepackage{enumitem}
+\usepackage{fancyvrb}
+\usepackage{tcolorbox}
+\usepackage{amssymb}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{bleu}{RGB}{0,70,140}
+\definecolor{fond}{RGB}{244,246,250}
+\definecolor{vert}{RGB}{0,120,60}
+\definecolor{orange}{RGB}{190,90,0}
+
+\newtcolorbox{commande}{colback=fond,colframe=bleu!40,boxrule=0.5pt,arc=1pt,
+  left=4pt,right=4pt,top=2pt,bottom=2pt}
+\newtcolorbox{attendu}{colback=vert!5,colframe=vert!60,boxrule=0.5pt,arc=1pt,
+  left=4pt,right=4pt,top=2pt,bottom=2pt,title={Résultat attendu},fonttitle=\bfseries\small,
+  coltitle=white,colbacktitle=vert!70}
+\newtcolorbox{remarque}{colback=orange!5,colframe=orange!60,boxrule=0.5pt,arc=1pt,
+  left=4pt,right=4pt,top=2pt,bottom=2pt}
+
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\case}{$\square$\ }
+\fvset{fontsize=\small}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.5em}
+\renewcommand{\arraystretch}{1.15}
+
+\title{\color{bleu}\textbf{Guide de vérification pour le tuteur}\\[4pt]
+\large Commande d'un séchoir solaire hybride (hydrogène / GPL) par machine à états finis\\
+Mémoire de master --- version finale V5.1}
+\author{Dossier remis au tuteur : mémoire, programme Arduino, banc de tests et simulation MATLAB R2025b}
+\date{Octobre 2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+%======================================================================
+\section{Objet du guide et contenu du dossier}
+
+Ce guide permet de vérifier, sans connaissance préalable du projet, que les
+résultats présentés dans le mémoire sont \textbf{reproductibles} :
+\begin{enumerate}[nosep]
+\item le programme Arduino compile pour la carte cible (Arduino Mega 2560) ;
+\item le programme passe son banc de tests natif (206 vérifications, 0 échec) ;
+\item le modèle Simulink/Stateflow se reconstruit par script sous \textbf{MATLAB R2025b},
+  et ses 16 scénarios donnent les changements d'état du mémoire ;
+\item la validation croisée Simulink / programme Arduino donne les écarts annoncés ;
+\item les études complémentaires E1 à E4 (énergie, modes de conduite, pertes,
+  sensibilité) redonnent les tableaux du chapitre~6 ;
+\item le mémoire se recompile à partir de ses sources.
+\end{enumerate}
+Chaque étape indique la commande exacte, sa durée approximative et le
+\textbf{résultat attendu}, tiré du mémoire. Une case \case est prévue pour cocher
+l'étape vérifiée.
+
+\subsection{Arborescence}
+
+\begin{Verbatim}[frame=single,rulecolor=\color{bleu!40}]
+DOSSIER_TUTEUR_Memoire_V5.1/
+|-- GUIDE_TUTEUR.pdf            ce guide
+|-- LISEZMOI.txt                résumé en une page
+|-- 1_Memoire/
+|   |-- Memoire_V5.1.pdf        mémoire compilé (179 pages)
+|   `-- source_latex/           main.tex, chapitres/, Figures/, bib/, code/
+`-- 2_Projet/                   (garder ces dossiers côte à côte)
+    |-- sechoir_hybride/        sechoir_hybride.ino : programme Arduino
+    |-- tests/                  banc de tests natif (C++, simulacres Arduino)
+    |-- matlab/                 modèle Simulink/Stateflow, scénarios, études
+    |   |-- Simulation_Sechoir_Hybride.slx   modèle (construit par script)
+    |   |-- Etudes_Sechoir.slx               copie étendue pour E1 à E4
+    |   |-- etudes/                          études E1 à E4
+    |   |-- reference/                       résultats du programme Arduino
+    |   |-- resultats_etudiant_R2025b/       figures obtenues par l'auteur
+    |   `-- RESULTATS_SIMULATION.md          chiffres des études
+    `-- docs/                   spécification de la machine à états
+\end{Verbatim}
+
+\begin{remarque}
+\textbf{Ne pas déplacer les dossiers de \code{2_Projet/}.} Le banc de tests
+inclut \code{../sechoir_hybride/sechoir_hybride.ino}, et les scripts MATLAB
+trouvent les références du programme Arduino dans \code{matlab/reference/}
+et le banc dans \code{../tests/}. Le fichier \code{1_Memoire/source_latex/code/sechoir_hybride.ino}
+est une copie identique du programme, utilisée pour les extraits du mémoire.
+\end{remarque}
+
+\subsection{Logiciels nécessaires}
+
+\begin{tabularx}{\textwidth}{@{}p{4.3cm}X@{}}
+\toprule
+\textbf{Logiciel} & \textbf{Usage} \\
+\midrule
+MATLAB \textbf{R2025b} + Simulink + Stateflow & simulation (section~\ref{sec:matlab}) ; aucune autre boîte à outils \\
+Arduino IDE 2.x (ou 1.8.x) & compilation pour la Mega 2560 (section~\ref{sec:arduino}) \\
+Compilateur C++ \code{g++} (C++11) & banc de tests natif ; Linux/macOS : natif ; Windows : MSYS2 (MinGW-w64) ou WSL \\
+XeLaTeX (TeX Live, MiKTeX) ou Overleaf & recompilation du mémoire (facultatif) \\
+Python 3 + matplotlib & régénérer trois schémas du chart (facultatif) \\
+\bottomrule
+\end{tabularx}
+
+\subsection{Parcours rapide (environ 45 minutes)}
+
+\begin{enumerate}[label=\case, leftmargin=1.6em]
+\item Arduino IDE : ouvrir \code{sechoir_hybride.ino}, carte Mega 2560, \emph{Vérifier} (§\ref{sec:compil}).
+\item Banc de tests : \code{make run} dans \code{2_Projet/tests} $\rightarrow$ 206 vérifications, 0 échec (§\ref{sec:banc}).
+\item MATLAB : \code{construire_modele}, puis \code{lancer_simulation(1:16)} (§\ref{sec:scenarios}).
+\item MATLAB : \code{comparer_scenario(1)}, \code{comparer_scenario(9)} (§\ref{sec:croisee}).
+\item MATLAB : \code{construire_modele_etudes}, puis \code{lancer_etudes('simulink')} (§\ref{sec:etudes}).
+\item Comparer les figures obtenues avec \code{resultats_etudiant_R2025b/} et le mémoire (§\ref{sec:correspondance}).
+\end{enumerate}
+
+%======================================================================
+\section{Vérification du programme Arduino}
+\label{sec:arduino}
+
+Le programme \code{2_Projet/sechoir_hybride/sechoir_hybride.ino} (1975 lignes)
+réalise la machine à états du chapitre~4 : états \code{ATTENTE},
+\code{MODE_SOLAIRE}, \code{MODE_H2}, \code{MODE_GPL},
+\code{DEMANDE_PROLONGATION}, \code{PROLONGATION}, \code{SECHAGE_TERMINE},
+\code{ERREUR_COMBUSTION}, \code{URGENCE_ATEX} et le menu de configuration.
+
+\subsection{Compilation pour l'Arduino Mega 2560}
+\label{sec:compil}
+
+\begin{enumerate}[nosep]
+\item Dans l'IDE Arduino : \emph{Outils $\rightarrow$ Gérer les bibliothèques}, installer :
+\end{enumerate}
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Bibliothèque (gestionnaire)} & \textbf{Auteur} & \textbf{Version testée} \\
+\midrule
+OneWire & Paul Stoffregen & 2.3.8 \\
+DallasTemperature & Miles Burton & 4.0.6 \\
+DHT sensor library (+ Adafruit Unified Sensor) & Adafruit & 1.4.7 (1.1.15) \\
+LiquidCrystal I2C & Frank de Brabander & 1.1.2 ou plus \\
+\midrule
+\multicolumn{3}{@{}l}{\code{Wire} et \code{EEPROM} sont fournies avec la carte (paquet \emph{Arduino AVR Boards}).} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{enumerate}[nosep,start=2]
+\item Ouvrir \code{2_Projet/sechoir_hybride/sechoir_hybride.ino}.
+\item \emph{Outils $\rightarrow$ Type de carte $\rightarrow$ Arduino Mega or Mega 2560} (processeur ATmega2560).
+\item \emph{Croquis $\rightarrow$ Vérifier/Compiler}.
+\end{enumerate}
+
+\begin{attendu}
+Compilation sans erreur. Taille obtenue lors de la préparation du dossier
+(avr-gcc 7.3.0, cœur Arduino AVR, bibliothèques ci-dessus) :
+\textbf{33\,826 octets de mémoire programme (12,9~\%)} et
+\textbf{3\,410 octets de RAM (41,6~\%)}. Les valeurs peuvent varier de quelques
+centaines d'octets selon les versions des bibliothèques.
+\end{attendu}
+
+\begin{remarque}
+Avec l'option \emph{Avertissements du compilateur : Tous}, quelques
+avertissements \code{-Wformat-truncation} apparaissent sur des \code{snprintf}
+de l'écran LCD (lignes 683 et 1886 à 1947). Ils sont sans conséquence :
+\code{snprintf} tronque proprement une ligne trop longue pour l'écran 20 caractères.
+La bibliothèque LiquidCrystal I2C doit offrir \code{lcd.init()} (ligne 960) :
+c'est le cas de celle de Frank de Brabander.
+\end{remarque}
+
+Le téléversement sur une carte réelle n'est pas nécessaire pour la
+vérification : sans capteurs, le programme démarre, affiche l'écran d'accueil
+et l'état sur le moniteur série (115\,200 bauds).
+
+\subsection{Banc de tests natif}
+\label{sec:banc}
+
+Le banc compile le \textbf{vrai} programme \code{.ino} sur PC, en remplaçant
+les fonctions Arduino et les bibliothèques par des simulacres
+(\code{tests/mocks/}) : temps, entrées et capteurs sont pilotés par le test.
+Il couvre 22 situations (chapitre~6, section~6.3).
+
+\begin{commande}
+\begin{Verbatim}
+cd 2_Projet/tests
+make run
+\end{Verbatim}
+Sans \code{make} (par exemple sous Windows avec MinGW) :
+\begin{Verbatim}
+g++ -std=c++11 -I. -Imocks -o test_sechoir test_sechoir.cpp mocks/Arduino.cpp
+./test_sechoir
+\end{Verbatim}
+\end{commande}
+
+\begin{attendu}
+\begin{Verbatim}
+=== BANC DE TESTS — SECHOIR SOLAIRE HYBRIDE v3 (FSM) ===
+  1. Demarrage a froid : purge -> allumage -> palier 100 %
+  ...
+  22. Bascule H2 -> GPL pendant la veille 0 % : veille conservee
+-----------------------------------------------------
+Verifications : 206   Echecs : 0
+Resultat      : TOUS LES TESTS PASSENT
+\end{Verbatim}
+La sortie complète est dans \code{tests/sortie_attendue_test_sechoir.txt}.
+Des avertissements \code{-Wformat-truncation} à la compilation sont normaux (voir ci-dessus).
+\end{attendu}
+
+Le même dossier contient les simulations en boucle fermée du programme réel
+avec un modèle thermique (chapitre~6, section~6.4) :
+\code{make simulation} (cycle complet, \code{cycle.csv}),
+\code{simulation_scenarios} (références des 16 scénarios, utilisées par MATLAB)
+et \code{simulation_etudes} (moteur \code{'programme'} des études E1 à E4).
+
+\subsection{Où lire le code}
+
+\begin{center}
+\begin{tabular}{@{}lrl@{}}
+\toprule
+\textbf{Élément} & \textbf{Ligne} & \textbf{Rôle (chapitre du mémoire)} \\
+\midrule
+\code{T_SEC_MAX_SECURITE = 90} & 217 & arrêt de sécurité surchauffe (§4) \\
+\code{DUREE_REFROIDISSEMENT} & 229 & ventilation de fin de cycle, 5 min \\
+\code{calculerSeuils()} & 749 & seuils $T_k = T_{init} + k\,(T_{cible}-T_{init})/3$ (§3) \\
+\code{majPalier()} & 781 & hystérésis à quatre niveaux 100/67/33/0~\% (§3) \\
+\code{palierDepuisTsec()} & 810 & palier d'allumage en régime CHAUD \\
+\code{majRegime()} & 822 & repère FROID / CHAUD (\code{Seuil_Chaud} $\pm H_{hyst}/2$) \\
+\code{seuilMaintienSolaire()} & 836 & maintien solaire : seuil OFF si CHAUD, ON si FROID \\
+\code{declencherUrgence()} & 895 & passage en \code{URGENCE_ATEX} \\
+\code{setup()} / \code{loop()} & 910 / 980 & initialisation, boucle principale \\
+\code{gererCombustion()} & 1096 & purge, allumage, régulation, veille \\
+\code{arbitrageSource()} & 1275 & choix solaire / H$_2$ / GPL \\
+\code{case ETAT_ERREUR_COMBUSTION} & 1509 & attente de l'opérateur \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Points faibles de la commande (section 6.7 du mémoire)}
+\label{sec:faiblesses}
+
+Les trois points faibles de la commande relevés en simulation peuvent être
+vérifiés directement dans le code :
+
+\begin{enumerate}
+\item \textbf{Maintien en mode solaire en fin d'après-midi.}
+  \code{seuilMaintienSolaire()} (l.~836) renvoie le seuil OFF (50~°C) tant que la
+  chambre est en régime CHAUD ; le repère ne repasse à FROID que sous
+  $T_{chaud} - H_{hyst}/2 = 37{,}5$~°C (\code{majRegime()}, l.~822). Il n'y a pas
+  de régulation de $T_{sec}$ en mode solaire. Étude E1, cas C1 : $T_{sec}$
+  quitte la bande à 15~h~40 et passe sous 45~°C à 17~h~22 sans réaction.
+\item \textbf{Pas de retour au solaire après une erreur de combustion.}
+  Dans \code{case ETAT_ERREUR_COMBUSTION} (l.~1509), \code{arbitrageSource()}
+  n'est pas appelée : la machine attend l'opérateur même si le soleil suffit
+  (étude E1, cas C5 : \code{ERREUR_COMBUSTION} à 11~h~00).
+\item \textbf{Remontée de palier tardive.} Dans \code{majPalier()} (l.~781), le
+  passage 33~\% $\rightarrow$ 67~\% n'a lieu que si $T_{sec} < T_2 - H_{hyst}/2$.
+  Les seuils sont fixés au démarrage par \code{calculerSeuils()} (l.~749) ; pour
+  $T_{init}=25$~°C et $T_{cible}=55$~°C : $T_1=35$, $T_2=45$, $T_3=55$~°C, soit
+  une remontée à 67~\% seulement sous \textbf{42,5~°C}, 10~°C sous la bande.
+  Étude E4 (renouvellement d'air de 200~m$^3$/h) : $T_{sec}$ se stabilise à
+  48,8~°C, entre ce seuil et la bande, sans remontée ni alarme.
+\end{enumerate}
+
+Autre limite vérifiable : le chien de garde (\emph{watchdog}) n'est pas
+activé (aucune occurrence de \code{wdt} dans le programme).
+
+%======================================================================
+\section{Vérification de la simulation sous MATLAB R2025b}
+\label{sec:matlab}
+
+\subsection{Principe}
+
+Le modèle \code{Simulation_Sechoir_Hybride.slx} n'est pas dessiné à la main :
+il est \textbf{construit entièrement par le script} \code{construire_modele.m}
+(chapitre~5) : chart Stateflow reprenant la logique du programme Arduino,
+câblage, modèle physique (puissance, thermique, séchage, brûleur), solveur
+\code{ode4} à pas fixe 0,1~s, chart discret à 0,1~s. Les scénarios sont définis
+une seule fois (\code{scenario_sechoir.m}) et rejoués à l'identique par le
+programme Arduino compilé sur PC (\code{reference/scenario_NN.csv}), ce qui
+permet la validation croisée.
+
+Le modèle fourni a été construit par l'auteur sous R2025b ; le reconstruire
+(§\ref{sec:construire}) prouve qu'il découle bien du script.
+
+\subsection{Mise en place}
+
+\begin{commande}
+\begin{Verbatim}
+>> cd('...\DOSSIER_TUTEUR_Memoire_V5.1\2_Projet\matlab')
+\end{Verbatim}
+\end{commande}
+Tous les scripts se lancent depuis ce dossier (le dossier courant de MATLAB).
+Les résultats sont écrits dans \code{matlab/captures/} (créé au besoin).
+
+\subsection{Construire le modèle (environ 1 minute)}
+\label{sec:construire}
+
+\begin{commande}
+\begin{Verbatim}
+>> construire_modele
+\end{Verbatim}
+\end{commande}
+
+\begin{attendu}
+Une suite de lignes \code{[ok]} : modèle vide créé, données (entrées, sorties,
+paramètres), états créés, actions, transitions, chart câblé, modèle physique,
+solveur \code{ode4} pas fixe 0.1, \textbf{« le modele compile sans erreur »}, puis
+\code{=== Simulation_Sechoir_Hybride.slx enregistre ===}.
+Le fichier \code{.slx} fourni est remplacé par celui qui vient d'être construit.
+\end{attendu}
+
+Pour examiner le modèle : \code{open_system('Simulation_Sechoir_Hybride')}
+(sous-systèmes \code{FSM} et \code{MODELE_THERMIQUE}, chart Stateflow).
+
+\subsection{Les 16 scénarios (5 à 10 minutes)}
+\label{sec:scenarios}
+
+\begin{commande}
+\begin{Verbatim}
+>> lancer_simulation(1:16)       % ou lancer_simulation(n) pour un seul
+\end{Verbatim}
+\end{commande}
+
+Pour chaque scénario, le script affiche son nom, le comportement attendu, la
+chronologie des changements d'état, et enregistre
+\code{captures/scenario_NN.png} (4 graphes : $T_{sec}$, paliers, vannes, état)
+et \code{captures/scenario_NN.mat}.
+
+\begin{attendu}
+Changements d'état (Tableau 6.7 du mémoire, §6.5.9, et Tableau 6.9 pour les scénarios 13 à 16) :
+
+\small
+\begin{longtable}{@{}rp{3.3cm}p{9.6cm}@{}}
+\toprule
+\textbf{N°} & \textbf{Scénario} & \textbf{Changements d'état (Simulink)} \\
+\midrule
+1 & Démarrage à froid H$_2$ & H$_2$ 10,1 s ; paliers 100~\% 130 s, 67~\% 222,1 s, 33~\% 335,1 s, 0~\% (veille) 597,2 s, rallumage 33~\% 1189,2 s, 0~\% 1323,4 s \\
+2 & Démarrage solaire & SOLAIRE 10,1 s \\
+3 & Bascule H$_2$ $\rightarrow$ GPL & H$_2$ 10,1 s $\rightarrow$ GPL 1250,1 s \\
+4 & Retour au solaire & H$_2$ 10,1 s $\rightarrow$ SOLAIRE 2160,1 s \\
+5 & Échecs d'allumage & H$_2$ $\rightarrow$ ERREUR 382,1 s $\rightarrow$ H$_2$ 700,1 s \\
+6 & Pertes de flamme & H$_2$ $\rightarrow$ URGENCE 700,0 s $\rightarrow$ ATTENTE 900,0 s \\
+7 & Fuite H$_2$ & H$_2$ $\rightarrow$ URGENCE 1500 s $\rightarrow$ ATTENTE 1900 s $\rightarrow$ H$_2$ 2000,1 s \\
+8 & Fin par humidité & DEMANDE 7210,1 s $\rightarrow$ TERMINÉ 7510 s $\rightarrow$ ATTENTE 7810 s \\
+9 & Prolongation acceptée & DEMANDE 7210,1 s $\rightarrow$ PROLONG. 7300,1 s $\rightarrow$ DEMANDE 9100,1 s $\rightarrow$ TERMINÉ 9400 s \\
+10 & Humidité FIXE & DEMANDE 5410,1 s $\rightarrow$ TERMINÉ 5710 s $\rightarrow$ ATTENTE 6010 s \\
+11 & Palier imposé 33~\% & TERMINÉ (90~°C) 1944,9 s $\rightarrow$ ATTENTE 2244,9 s \\
+12 & Surchauffe (100~\% imposé) & TERMINÉ (90~°C) 632,4 s $\rightarrow$ ATTENTE 932,4 s \\
+13 & Bascule pendant la veille & GPL 900,1 s ; pas d'ouverture du gaz tant que $T_{sec}>52{,}5$~°C ; rallumage GPL à 33~\% à 1189,2 s \\
+14 & Flamme parasite & URGENCE 805,0 s (flamme vue gaz fermé) $\rightarrow$ ATTENTE 900,0 s \\
+15 & Retour GPL $\rightarrow$ H$_2$ & GPL 1250,1 s ; 33~\% 1370 s ; H$_2$ 2000,1 s ; 33~\% 2120,0 s \\
+16 & Arrêt d'urgence & URGENCE 400,0 s ; réarmement refusé à 500 s, accepté à 700 s (ATTENTE) ; allumage 100~\% à 920,0 s \\
+\bottomrule
+\end{longtable}
+\end{attendu}
+
+\subsection{Validation croisée avec le programme Arduino}
+\label{sec:croisee}
+
+\begin{commande}
+\begin{Verbatim}
+>> comparer_scenario(1)
+>> for n = 1:16, comparer_scenario(n); end      % tous
+\end{Verbatim}
+\end{commande}
+
+Le script superpose $T_{sec}$ et l'état du modèle (trait plein) et du programme
+Arduino réel (tirets, \code{reference/scenario_NN.csv}) et liste les
+changements d'état des deux côtés avec leur écart
+(\code{captures/comparaison_NN.png}).
+
+\begin{attendu}
+\begin{itemize}[nosep]
+\item même suite d'états des deux côtés, aucune ligne « absent » ;
+\item écart maximal \textbf{0,1~s} (pas du chart) pour tous les scénarios, sauf le
+  scénario~12 : \textbf{0,6~s} (arrêt à 90~°C, franchi en pente raide).
+\end{itemize}
+\end{attendu}
+
+\begin{remarque}
+Les instants de \emph{changement de palier} s'écartent davantage que les
+changements d'état : jusqu'à environ 4~s par cycle de veille (14~s après 1~h
+dans le scénario~1), car le programme lit la sonde une fois par seconde alors que
+le chart décide toutes les 0,1~s. Ce point est discuté au §6.5.9 du mémoire ;
+il ne change ni la suite des états ni les paliers atteints.
+\end{remarque}
+
+\subsection{Figures complémentaires du chapitre 6 (moins d'une minute)}
+
+\begin{commande}
+\begin{Verbatim}
+>> preparer_figures_memoire       % lit captures/scenario_NN.mat, sans Simulink
+\end{Verbatim}
+\end{commande}
+
+\begin{attendu}
+Fichiers \code{captures/memoire/} : \code{zoom_regulation.png},
+\code{humidite_fin_cycle.png}, \code{energie_scenarios.png} et \code{.csv},
+\code{ecarts_validation.png} et \code{.csv}. Valeurs de contrôle affichées :
+\begin{itemize}[nosep]
+\item scénario 1, première heure : \textbf{599~W} (attendu $\approx$ 600~W) ;
+\item scénario 8, jusqu'à la demande (7210~s) : \textbf{453~W, 0,91~kWh} ;
+\item \code{ecarts_validation.csv} : 0,1~s partout, 0,6~s pour le scénario 12.
+\end{itemize}
+\end{attendu}
+
+Images du modèle et du chart (facultatif) : \code{capturer_modele} (modèle
+global, sous-systèmes, chart complet) et \code{capturer_chart_lisible}
+(hiérarchie du chart). Les trois zooms du chart (\code{MODE_H2}, région
+\code{PHASE}, \code{URGENCE_ATEX}) sont produits par
+\code{python3 outils/schemas_chart.py captures/memoire}. Les vues « animation »
+(état actif surligné) sont des captures d'écran prises pendant la simulation.
+
+\subsection{Études complémentaires E1 à E4 (environ 4 minutes)}
+\label{sec:etudes}
+
+\begin{commande}
+\begin{Verbatim}
+>> addpath('etudes')
+>> construire_modele_etudes          % une fois : Etudes_Sechoir.slx
+>> lancer_etudes('simulink')          % E1 à E4 (environ 234 s)
+\end{Verbatim}
+\end{commande}
+
+\code{construire_modele_etudes} copie le modèle validé (sans modifier le chart)
+et lui ajoute les entrées des études (ensoleillement, stock d'hydrogène, bruit
+et retard de mesure, perturbations) ; il se termine par des lignes \code{[ok]}.
+Les comptes rendus sont écrits dans \code{captures/etudes/resultats_E1.txt}
+à \code{E4.txt}, les figures et tableaux dans \code{captures/etudes/Figures/simulation/}.
+
+\begin{attendu}
+\small
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+\textbf{Étude} & \textbf{Valeurs de contrôle (mémoire, §6.6)} \\
+\midrule
+E1, cas C1 (journée claire) & $E_{H_2} = 0{,}60$~kWh, solaire à 11~h~58, 6 rallumages, 22,5~g d'H$_2$ \\
+E1, cas C4 (stock H$_2$ limité) & bascule GPL à 10~h~54 \\
+E1, cas C5 (sans GPL) & \code{ERREUR_COMBUSTION} à 11~h~00 \\
+E1, économie due au solaire & $2{,}37 - 0{,}60 = 1{,}77$~kWh (75~\%) \\
+E2, M1 (commande automatique) & 0,91~kWh, 99,8~\% du temps dans la bande, 10 allumages \\
+E2, M4 (sans régulation) & $T_{max}$ = 164,9~°C, +257~\% d'énergie \\
+E3 (bilan des pertes) & énergie fournie 2,06~kWh, dont parois 1,90~kWh (92~\%) \\
+E4, cas nominal & période 12,1~min, 302~W (théorie 1\textsuperscript{er} ordre : 12,1~min, 306~W) \\
+E4, 200~m$^3$/h & palier 33~\% insuffisant : $T_{sec}$ plafonne à 48,8~°C \\
+E4, porte ouverte 60~s & retour dans la bande à 1899~s \\
+\bottomrule
+\end{tabularx}
+\end{attendu}
+
+Les mêmes études peuvent être rejouées avec le \textbf{programme Arduino réel}
+à la place du chart : \code{lancer_etudes('programme')} (nécessite \code{g++} et
+\code{make} ; compile \code{tests/simulation_etudes.cpp}). Les cas M2 à M4 de
+l'étude E2 (conduite manuelle, absence de régulation) n'utilisent pas la
+commande et sont calculés par \code{simuler_pilote.m}.
+
+\subsection{Comparer avec les résultats de l'auteur}
+
+Le dossier \code{matlab/resultats_etudiant_R2025b/} contient les sorties
+obtenues par l'auteur sous MATLAB R2025b :
+\begin{itemize}[nosep]
+\item \code{scenarios/} : \code{scenario_01..16.png}, \code{comparaison_01..16.png}, images du modèle ;
+\item \code{memoire/} : figures complémentaires, vues du chart, captures d'animation, fichiers \code{.csv} ;
+\item \code{etudes/} : \code{resultats_E1..E4.txt}, figures et tableaux LaTeX des études.
+\end{itemize}
+Les figures que vous produisez dans \code{captures/} doivent leur être
+identiques (aux détails de mise en page près). Les fichiers \code{.mat} n'ont
+pas été joints (taille) : ils sont recréés par \code{lancer_simulation}.
+
+\subsection{Correspondance figures du mémoire / scripts}
+\label{sec:correspondance}
+
+\small
+\begin{longtable}{@{}p{6.3cm}p{4.3cm}p{4.6cm}@{}}
+\toprule
+\textbf{Fichier dans \code{Figures/}} & \textbf{Section du mémoire} & \textbf{Produit par} \\
+\midrule
+\code{simulink/modele_global.png}, \code{modele_fsm.png}, \code{modele_thermique.png} & 5.4 Architecture & \code{capturer_modele} \\
+\code{simulink/chart_hierarchie.png} & 5.5.1 Hiérarchie & \code{capturer_chart_lisible} \\
+\code{simulink/chart_mode_h2.png}, \code{chart_region_phase.png}, \code{chart_urgence.png} & 5.5 Le chart & \code{outils/schemas_chart.py} \\
+\code{simulink/scenario_01..12.png} & 6.5.2 à 6.5.7 & \code{lancer_simulation(n)} \\
+\code{simulink/anim_*.png} & 6.5.8 État actif & capture d'écran pendant la simulation \\
+\code{simulink/comparaison_NN.png} & 6.5.9 et annexe E & \code{comparer_scenario(n)} \\
+\code{simulink/zoom_regulation.png} ; \code{humidite_fin_cycle.png} ; \code{energie_scenarios.png}, \code{ecarts_validation.png} & 6.5.2 ; 6.5.6 ; 6.5.9 & \code{preparer_figures_memoire} \\
+\code{simulink/scenario_13..16.png} & 6.5.11 et annexe E & \code{lancer_simulation(13:16)} \\
+\code{reference/scenario_NN_firmware.png} & 6.5.11, annexe E & \code{tracer_references} \\
+\code{simulation/profil_journee.png}, \code{energie_sources.png}, \code{tsec_sources.png}, \code{tables/tab_sources.tex}, \code{tab_consommation.tex} & 6.6.2, 6.6.3 & étude E1 \\
+\code{simulation/modes_tsec.png}, \code{modes_energie.png}, \code{tables/tab_modes.tex} & 6.6.4 & étude E2 \\
+\code{simulation/bilan_pertes.png}, \code{tables/tab_pertes.tex} & 6.6.5 & étude E3 \\
+\code{simulation/sensibilite_retard.png}, \code{perturbation_porte.png}, \code{tables/tab_sensibilite.tex} & 6.6.6 & étude E4 \\
+Figures 5.1 à 5.11 (racine de \code{Figures/}) & 6.4 Boucle fermée & données des bancs \code{tests/} (programme réel en boucle fermée) \\
+\code{5.0_banc_tests_terminal.png} & 6.3 Banc de tests & sortie de \code{make run} \\
+\bottomrule
+\end{longtable}
+\normalsize
+
+Les tableaux de résultats du §6.6 (\code{Figures/simulation/tables/*.tex}) sont
+écrits directement par les études et lus par le mémoire sans recopie manuelle.
+
+\subsection{Difficultés possibles}
+
+\begin{itemize}
+\item \textbf{« fichier introuvable » ou scénario de référence absent} : le dossier
+  courant de MATLAB n'est pas \code{2_Projet/matlab}, ou les dossiers de
+  \code{2_Projet/} ont été séparés.
+\item \textbf{Image PNG noire} (raté de rendu graphique observé sous R2025b) :
+  \code{exporter_figure} la réexporte automatiquement avec le moteur
+  \code{painters} ; sinon relancer \code{retracer_scenarios}, qui retrace les
+  figures depuis les \code{.mat} sans resimuler.
+\item \textbf{Avertissement sur le cache} : un dossier \code{slprj/} et des
+  fichiers \code{.slxc} sont créés à la première simulation ; ils peuvent être
+  supprimés sans risque.
+\item \textbf{Version de MATLAB} : les scripts visent R2025b. Une version plus
+  ancienne peut refuser certaines propriétés de l'API Stateflow ; chaque étape
+  de \code{construire_modele} affiche alors l'erreur exacte.
+\end{itemize}
+
+%======================================================================
+\section{Recompiler le mémoire (facultatif)}
+
+\begin{commande}
+\begin{Verbatim}
+cd 1_Memoire/source_latex
+xelatex main
+bibtex main
+xelatex main
+xelatex main
+\end{Verbatim}
+\end{commande}
+Sur Overleaf : importer le dossier \code{source_latex} (zip), \emph{Menu
+$\rightarrow$ Compiler : XeLaTeX}, fichier principal \code{main.tex}. Polices
+utilisées : DejaVu Sans Mono (code) et Amiri (résumé en arabe).
+
+\begin{attendu}
+Environ 180 pages (179 lors de la préparation du dossier), sans référence indéfinie.
+Les cadres rouges « FIGURE À COMPLÉTER » et les mentions « À COMPLÉTER »
+désignent des photographies et des caractéristiques du prototype
+(installation gaz, capteurs, armoire) qui ne relèvent pas de la simulation.
+\end{attendu}
+
+%======================================================================
+\section{Portée et limites de la validation}
+
+\begin{itemize}
+\item Les simulations valident la \textbf{logique} de la commande (suite des
+  états, paliers, sécurités) et sa concordance avec le programme Arduino ; elles
+  ne prédisent pas les durées réelles de séchage : le coefficient $UA$ est tiré
+  de la littérature et le modèle de séchage est illustratif (§6.7).
+\item La validation croisée montre que le modèle et le programme font la
+  même chose ; l'adéquation au procédé réel reste à établir par des essais.
+\item Le programme n'a été vérifié qu'en compilation, sur banc natif et en
+  simulation : les essais sur le prototype (détecteur de flamme, seuils des
+  capteurs de gaz, calibrage de $\Delta T_{Sol}$ et du critère de fin) sont
+  listés à la fin du §6.7.
+\end{itemize}
+
+\subsection*{Vérifications faites lors de la préparation du dossier}
+
+\begin{tabularx}{\textwidth}{@{}Xl@{}}
+\toprule
+Compilation pour ATmega2560 (avr-gcc 7.3.0, cœur Arduino AVR, bibliothèques du §\ref{sec:compil}) & sans erreur, 33\,826 o / 3\,410 o \\
+Banc de tests natif depuis ce dossier (\code{make run}) & 206 vérifications, 0 échec \\
+Compilation des bancs \code{simulation_scenarios} et \code{simulation_etudes} & sans erreur \\
+Compilation du mémoire (XeLaTeX + BibTeX) & 179 pages, sans erreur \\
+Simulations MATLAB R2025b & exécutées par l'auteur (résultats joints) \\
+\bottomrule
+\end{tabularx}
+
+\end{document}

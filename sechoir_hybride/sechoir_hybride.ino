@@ -66,6 +66,16 @@
 #include <LiquidCrystal_I2C.h>
 #include <EEPROM.h>
 
+/* [INTERFACE] Interface opérateur PC / téléphone (liaison_interface.h).
+ *   AVEC_PUPITRE_LCD 1 : programme d'origine, écran 20x4 et boutons.
+ *   AVEC_PUPITRE_LCD 0 : sans écran ni boutons (D30-D40 et D44 ignorés),
+ *                        conduite par l'interface ; l'arrêt d'urgence D42
+ *                        reste lu exactement comme avant. */
+#ifndef AVEC_PUPITRE_LCD
+#define AVEC_PUPITRE_LCD 0
+#endif
+#include "liaison_interface.h"   // [INTERFACE]
+
 /* --------------------------------------------------------------------------
  * 2. DÉFINITION DES BROCHES (Arduino Mega 2560)
  * ------------------------------------------------------------------------*/
@@ -597,7 +607,9 @@ uint32_t        t_derniere_regul = 0;            // Dernière comparaison T_sec 
 /* --- Variables de service --- */
 static uint32_t t_boucle = 0;                    // millis() figé pour toute l'itération
 static uint32_t t_dernier_capteur = 0;
+#if AVEC_PUPITRE_LCD             // [INTERFACE]
 static uint32_t t_dernier_lcd = 0;
+#endif
 static uint32_t chrono_refroidissement = 0;
 static uint16_t nb_echecs_allumage = 0;
 static bool     demande_rearm_ihm = false;       // Chemin 2 de réarmement ATEX
@@ -909,6 +921,7 @@ static void lireCapteursLents();
 
 void setup() {
   Serial.begin(115200);
+  liaisonInit();                 // [INTERFACE]
 
   /* Sorties TOR : toutes inactives AVANT tout autre traitement. */
   const uint8_t sorties_tor[] = {PIN_V_H2, PIN_V_BUT, PIN_EV1, PIN_EV2,
@@ -956,10 +969,12 @@ void setup() {
   dhtExtr.begin();
 
   /* Afficheur 20x4 I2C. */
+#if AVEC_PUPITRE_LCD             // [INTERFACE] sans écran : aucune initialisation I2C
   Wire.begin();
   lcd.init();
   lcd.backlight();
   lcd.clear();
+#endif
 
   delay(800);                 // 1re conversion DS18B20 (12 bits : 750 ms)
   t_boucle = millis();
@@ -979,7 +994,9 @@ void setup() {
  * ------------------------------------------------------------------------*/
 void loop() {
   lireEntrees();     // acquisition + recalcul de H_fin
+  liaisonAvantFSM(); // [INTERFACE] commandes reçues -> boutons virtuels
   pasFSM();          // machine à états
+  liaisonApresFSM(); // [INTERFACE] accusés de réception + télémesure
   ecrireSorties();   // application physique des sorties
   gererIHM();        // menu LCD + 4 boutons + réarmement
 }
@@ -999,6 +1016,7 @@ static float convertirPression(int brut) {
   return p;
 }
 
+#if AVEC_PUPITRE_LCD             // [INTERFACE] boutons du pupitre
 /* Lecture d'un bouton à contact vers 0 V : appuyé = niveau bas. */
 static bool lireBouton(uint8_t pin) {
   return digitalRead(pin) == LOW;
@@ -1012,6 +1030,7 @@ static bool detecterFront(uint8_t idx, bool niveau) {
   niveau_prec[idx] = niveau;
   return niveau;                                              // front montant seul
 }
+#endif                           // [INTERFACE]
 
 /* Capteurs lents : DS18B20 (750 ms de conversion) et DHT22 (2 s mini). */
 static void lireCapteursLents() {
@@ -1038,6 +1057,7 @@ void lireEntrees() {
   Press_H2   = convertirPression(analogRead(PIN_PRESS_H2));
 
   /* --- Boutons + fronts --- */
+#if AVEC_PUPITRE_LCD             // [INTERFACE] sans pupitre : seuls les boutons virtuels
   Btn_Menu  = lireBouton(PIN_BTN_MENU);
   Btn_Up    = lireBouton(PIN_BTN_UP);
   Btn_Down  = lireBouton(PIN_BTN_DOWN);
@@ -1052,6 +1072,9 @@ void lireEntrees() {
   front[B_START] = detecterFront(B_START, Btn_Start);
   front[B_STOP]  = detecterFront(B_STOP,  Btn_Stop);
   front[B_REARM] = detecterFront(B_REARM, Btn_Rearm);
+#else
+  for (uint8_t i = 0; i < NB_BOUTONS; i++) front[i] = false;   // [INTERFACE]
+#endif
 
   /* --- Capteurs lents --- */
   if ((t_boucle - t_dernier_capteur) >= PERIODE_CAPTEURS) {
@@ -1673,6 +1696,7 @@ void ecrireSorties() {
 /* Édite le champ courant du menu selon `sens` (+1 / -1), puis reborne
  * systématiquement toute la config (défense en profondeur : un champ ne
  * peut jamais sortir de sa plage sûre, quel que soit le pas appliqué). */
+#if AVEC_PUPITRE_LCD             // [INTERFACE] menu et afficheur du pupitre
 /* Incrément/décrément d'une durée entière non signée, sans passer sous 0. */
 static void pasEntier(uint32_t& v, int sens, uint32_t pas) {
   if (sens > 0) v += pas;
@@ -1944,7 +1968,10 @@ static void composerLCD(char lignes[4][LCD_COLONNES + 1]) {
   }
 }
 
+#endif                           // [INTERFACE]
+
 void gererIHM() {
+#if AVEC_PUPITRE_LCD             // [INTERFACE] sans pupitre : tout passe par l'interface
   /* --- Navigation et édition : actives en configuration et en urgence --- */
   if (etat_courant == ETAT_CONFIG_MENU || etat_courant == ETAT_URGENCE_ATEX) {
     if (frontPris(B_MENU)) Menu_Index = (uint8_t)((Menu_Index + 1) % NB_CHAMPS_MENU);
@@ -1972,4 +1999,9 @@ void gererIHM() {
       lcd.print(lignes[i]);
     }
   }
+#endif                           // [INTERFACE]
 }
+
+/* [INTERFACE] Mise en œuvre de la liaison : en fin de fichier, car elle
+ * utilise les variables et fonctions `static` définies ci-dessus. */
+#include "liaison_interface_impl.h"

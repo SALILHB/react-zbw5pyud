@@ -7,6 +7,7 @@
 
 MockArduino  mockIO;
 SerieMock    Serial;
+SerieMock    Serial1;
 TwoWire      Wire;
 EEPROMClass  EEPROM;
 

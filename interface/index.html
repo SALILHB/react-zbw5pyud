@@ -1140,8 +1140,15 @@ function palierPct(t) {
   if (t.src === 'SOLAIRE' || t.ph === 'PURGE' || t.ph === '0% (veille)' || !(t.vh2 || t.vbut)) return 0;
   return [100, 67, 33, 0][t.pal];
 }
+/* Horodatage des trames : heure du PC ; en démo, temps simulé (×10). */
+let debutDemo = 0;
+function instantTrame(t) {
+  if (S.transport && S.transport.nom === 'DEMO') return debutDemo + t.ms;
+  return Date.now();
+}
 function memoriserTrame(t) {
-  S.trames.push({ d: Date.now(), t: [new Date().toISOString(), t.ms, t.etat, t.src, t.ph, palierPct(t), t.tsec, t.tc, t.t1, t.t2, t.t3,
+  const d = instantTrame(t);
+  S.trames.push({ d, t: [new Date(d).toISOString(), t.ms, t.etat, t.src, t.ph, palierPct(t), t.tsec, t.tc, t.t1, t.t2, t.t3,
     t.hsec, t.hfin, t.tamb, t.hamb, t.tcap, t.fl, t.mq8, t.mq6, t.ph2, t.au, t.vh2, t.vbut, t.ev1, t.ev2, t.ev3, t.spk, t.buz,
     t.pwmp, t.pwmd, t.pwme, t.tcy] });
   if (S.trames.length > 86400) S.trames.splice(0, 3600);
@@ -1162,7 +1169,8 @@ function preparerCanvas(cv) {
 function tracer(cv, series, opts) {
   const { c, l, h } = preparerCanvas(cv);
   const g = 44, d = 10, hh = 10, b = 24;
-  const pts = S.trames.filter((p) => !fenetre || p.d >= Date.now() - fenetre * 1000);
+  const fin = S.trames.length ? S.trames[S.trames.length - 1].d : Date.now();
+  const pts = S.trames.filter((p) => !fenetre || p.d >= fin - fenetre * 1000);
   c.font = '12px system-ui, sans-serif';
   c.fillStyle = '#3d4350';
   if (pts.length < 2) { c.fillText('En attente de données…', g, h / 2); return; }
@@ -1320,6 +1328,7 @@ function connecterDemo() {
   preparerSon();
   fermerTransport();
   const simu = new SimuSechoir(recevoirLigne);
+  debutDemo = Date.now();
   S.transport = { nom: 'DEMO', envoyer: (l) => setTimeout(() => simu.commande(l), 40), fermer: () => simu.arreter(), simu };
   S.pilote = true;
   debutLiaison('Démo');

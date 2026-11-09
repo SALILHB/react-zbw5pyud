@@ -1,0 +1,1748 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14213d">
+<title>Séchoir hybride — pupitre opérateur</title>
+<!--
+  Interface opérateur du séchoir solaire hybride (Arduino Mega 2560).
+  Un seul fichier, aucune ressource externe : il fonctionne
+    - ouvert en local dans Chrome ou Edge, relié au Mega par câble USB (Web Serial) ;
+    - servi par la passerelle ESP32 (http://192.168.4.1), relié par WebSocket ;
+    - en mode démo, sans matériel (séchoir simulé dans la page).
+  Le Mega reste le seul automate : la page n'envoie que des demandes
+  (protocole : docs/PROTOCOLE.md), et le Mega répond par un accusé de réception.
+-->
+<style>
+/* === JETONS DE COULEUR — fort contraste, lisible en plein soleil === */
+:root {
+  --fond: #f4f5f7;
+  --carte: #ffffff;
+  --texte: #0b0d12;
+  --texte-2: #3d4350;
+  --bord: #c9ced8;
+  --accent: #14213d;
+  --rouge: #c1121f;
+  --rouge-fonce: #8a0b14;
+  --orange: #d9480f;
+  --vert: #1b7a3a;
+  --bleu: #1d4ed8;
+  --jaune: #b8860b;
+  --violet: #6d28d9;
+  --sarcelle: #0f766e;
+  --gris: #5b6270;
+  --ok-fond: #e7f6ec;
+  --alerte-fond: #fff1e6;
+  --danger-fond: #fde8ea;
+  --rayon: 10px;
+  --ombre: 0 1px 2px rgba(0,0,0,.08), 0 2px 8px rgba(0,0,0,.06);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--fond);
+  color: var(--texte);
+  font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+  padding-bottom: calc(88px + env(safe-area-inset-bottom));
+  -webkit-text-size-adjust: 100%;
+}
+button, select, input { font: inherit; color: inherit; }
+.chiffre { font-variant-numeric: tabular-nums; }
+
+/* === BARRE DE LIAISON === */
+.barre {
+  position: sticky; top: 0; z-index: 70;   /* au-dessus des écrans d'alarme : état de la liaison toujours visible */
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 8px 16px; background: var(--accent); color: #fff;
+}
+.barre h1 { font-size: 17px; margin: 0 auto 0 0; font-weight: 700; letter-spacing: .2px; }
+.pastille {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px; font-size: 14px; font-weight: 600;
+  background: rgba(255,255,255,.14);
+}
+.pastille::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: #9aa3b2; }
+.pastille.ok::before { background: #34d058; }
+.pastille.perdue { background: var(--rouge); }
+.pastille.perdue::before { background: #fff; }
+.pastille.lecture::before { background: #f5b301; }
+.btn-barre {
+  min-height: 40px; padding: 6px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,.5);
+  background: transparent; color: #fff; font-weight: 600; cursor: pointer;
+}
+.btn-barre:hover { background: rgba(255,255,255,.12); }
+
+/* === BANDEAU D'ÉTAT (couleur = état de la machine) === */
+.bandeau {
+  display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center;
+  padding: 12px 16px; color: #fff; background: var(--gris);
+  border-bottom: 4px solid rgba(0,0,0,.25);
+}
+.bandeau .nom-etat { font-size: 28px; font-weight: 800; letter-spacing: .5px; }
+.bandeau .detail { font-size: 16px; font-weight: 600; opacity: .95; }
+.bandeau .chrono { grid-row: 1 / span 2; grid-column: 2; text-align: right; font-size: 22px; font-weight: 700; }
+.bandeau .chrono small { display: block; font-size: 13px; font-weight: 600; opacity: .9; }
+.etat-0 { background: #4a5160; } .etat-1 { background: #3b4a6b; }
+.etat-2 { background: #9a6a00; } .etat-3 { background: var(--bleu); }
+.etat-4 { background: var(--violet); } .etat-5 { background: var(--sarcelle); }
+.etat-6 { background: #0e7490; } .etat-7 { background: var(--vert); }
+.etat-8 { background: var(--orange); } .etat-9 { background: var(--rouge); }
+.etat-x { background: #2b2f38; }
+
+.alerte-liaison {
+  display: none; padding: 10px 16px; background: var(--rouge); color: #fff; font-weight: 700; text-align: center;
+}
+.alerte-liaison.visible { display: block; }
+.avis-demo {
+  position: sticky; top: var(--haut-barre, 56px); z-index: 55;   /* reste accessible au-dessus des écrans d'alarme */
+  display: none; padding: 6px 16px; background: #fff7d6; border-bottom: 1px solid #e8d58a; font-size: 14px;
+}
+.avis-demo.visible { display: flex; flex-wrap: nowrap; gap: 8px; align-items: center; overflow-x: auto; scrollbar-width: thin; }
+.avis-demo strong { flex: 0 0 auto; }
+.avis-demo button {
+  flex: 0 0 auto; min-height: 36px; padding: 4px 10px; border-radius: 8px; border: 1px solid #b89a2a; background: #fff; cursor: pointer; white-space: nowrap;
+}
+.avis-demo button[aria-pressed="true"] { background: #6b5200; color: #fff; }
+
+/* === ONGLETS === */
+.onglets {
+  display: flex; gap: 4px; overflow-x: auto; padding: 8px 16px 0; background: var(--fond);
+  position: sticky; top: var(--haut-ecran, 56px); z-index: 20; scrollbar-width: none;
+}
+.onglets::-webkit-scrollbar { display: none; }
+.onglets button {
+  flex: 0 0 auto; min-height: 44px; padding: 8px 14px; border: 1px solid var(--bord); border-bottom: none;
+  border-radius: 10px 10px 0 0; background: #e6e9ee; font-weight: 700; color: var(--texte-2); cursor: pointer;
+}
+.onglets button[aria-selected="true"] { background: var(--carte); color: var(--texte); box-shadow: 0 -2px 0 var(--accent) inset; }
+main { padding: 0 16px 16px; }
+.panneau { display: none; }
+.panneau.actif { display: block; }
+
+/* === CARTES === */
+.grille { display: grid; gap: 12px; grid-template-columns: 1fr; margin-top: 12px; }
+@media (min-width: 720px) { .grille { grid-template-columns: repeat(2, 1fr); } }
+@media (min-width: 1100px) { .grille { grid-template-columns: repeat(3, 1fr); } }
+.carte {
+  background: var(--carte); border: 1px solid var(--bord); border-radius: var(--rayon);
+  padding: 14px 16px; box-shadow: var(--ombre); min-width: 0;
+}
+.carte h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .6px; color: var(--texte-2); margin: 0 0 8px; }
+.carte.large { grid-column: 1 / -1; }
+.gros { font-size: 56px; font-weight: 800; line-height: 1; }
+.gros small { font-size: 24px; font-weight: 700; color: var(--texte-2); }
+.moyen { font-size: 30px; font-weight: 800; line-height: 1.1; }
+.ligne-info { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; border-bottom: 1px dashed #e1e4ea; }
+.ligne-info:last-child { border-bottom: none; }
+.ligne-info span:last-child { font-weight: 700; text-align: right; }
+.etiquette { color: var(--texte-2); }
+
+/* Jauge de température : position de T_sec par rapport à T1, T2, T3 */
+.jauge { position: relative; height: 34px; margin: 18px 0 26px; border-radius: 6px; background: linear-gradient(90deg, #dbe7ff, #fff3d6 60%, #ffd9d9); border: 1px solid var(--bord); }
+.jauge .repere { position: absolute; top: -6px; bottom: -6px; width: 2px; background: var(--texte); }
+.jauge .repere span { position: absolute; top: 40px; left: 50%; transform: translateX(-50%); font-size: 12px; font-weight: 700; white-space: nowrap; }
+.jauge .bande { position: absolute; top: 0; bottom: 0; background: rgba(27,122,58,.25); border-left: 1px dashed var(--vert); border-right: 1px dashed var(--vert); }
+.jauge .curseur { position: absolute; top: 3px; width: 26px; height: 26px; margin-left: -13px; border-radius: 50%; background: var(--rouge); border: 3px solid #fff; box-shadow: 0 0 0 2px var(--rouge); transition: left .4s; }
+
+/* Barres de niveau (humidité, MQ, PWM) */
+.niveau { position: relative; height: 14px; border-radius: 7px; background: #e6e9ee; overflow: hidden; margin: 4px 0 8px; }
+.niveau i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--bleu); transition: width .4s; }
+.niveau b { position: absolute; top: -2px; bottom: -2px; width: 3px; background: var(--rouge); }
+.niveau.danger i { background: var(--rouge); }
+
+/* Voyants des sorties (lecture seule) */
+.voyants { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
+.voyant { display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--bord); border-radius: 8px; font-weight: 700; font-size: 14px; }
+.voyant::before { content: ""; flex: 0 0 auto; width: 16px; height: 16px; border-radius: 50%; background: #cfd4dc; border: 2px solid #9aa3b2; }
+.voyant.on::before { background: #22c55e; border-color: #15803d; box-shadow: 0 0 6px #22c55e; }
+.voyant.on.chaud::before { background: #f97316; border-color: #c2410c; box-shadow: 0 0 6px #f97316; }
+.voyant.on.alarme::before { background: var(--rouge); border-color: var(--rouge-fonce); }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-weight: 800; font-size: 14px; }
+.badge.ok { background: var(--ok-fond); color: var(--vert); }
+.badge.alerte { background: var(--alerte-fond); color: var(--orange); }
+.badge.danger { background: var(--danger-fond); color: var(--rouge); }
+
+/* === BOUTONS === */
+.btn {
+  min-height: 52px; padding: 10px 18px; border-radius: 10px; border: 2px solid var(--accent);
+  background: #fff; color: var(--accent); font-weight: 800; font-size: 17px; cursor: pointer;
+}
+.btn:hover:not(:disabled) { background: #eef1f7; }
+.btn.plein { background: var(--accent); color: #fff; }
+.btn.vert { border-color: var(--vert); background: var(--vert); color: #fff; }
+.btn.rouge { border-color: var(--rouge); background: var(--rouge); color: #fff; }
+.btn.orange { border-color: var(--orange); background: var(--orange); color: #fff; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.rangee { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.reglage { display: grid; grid-template-columns: 64px 1fr 64px; gap: 10px; align-items: center; }
+.reglage .btn { font-size: 28px; padding: 0; }
+.reglage .valeur { text-align: center; font-size: 44px; font-weight: 800; }
+
+/* === BARRE STOP (toujours visible) === */
+.stop-barre {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); background: rgba(244,245,247,.96);
+  border-top: 1px solid var(--bord); display: flex; gap: 12px; align-items: center;
+}
+#btnStop {
+  flex: 1; min-height: 64px; border-radius: 12px; border: 3px solid var(--rouge-fonce);
+  background: var(--rouge); color: #fff; font-size: 26px; font-weight: 900; letter-spacing: 2px; cursor: pointer;
+}
+#btnStop:disabled { opacity: .55; }
+.stop-barre .note { font-size: 13px; color: var(--texte-2); max-width: 220px; }
+@media (max-width: 520px) { .stop-barre .note { display: none; } }
+
+/* === ÉCRANS D'ALARME (urgence, erreur, demande) === */
+.ecran {
+  position: fixed; inset: 0; z-index: 50; display: none; overflow-y: auto;
+  padding: calc(var(--haut-ecran, 56px) + 12px) 16px calc(100px + env(safe-area-inset-bottom)); color: #fff;
+}
+.ecran.visible { display: block; }
+.ecran .contenu { max-width: 720px; margin: 0 auto; }
+.ecran h2 { font-size: 34px; margin: 8px 0 4px; font-weight: 900; }
+.ecran .sous-titre { font-size: 20px; font-weight: 700; margin-bottom: 16px; }
+.ecran .bloc { background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.35); border-radius: 12px; padding: 12px 14px; margin: 12px 0; }
+.ecran .bloc .ligne-info { border-bottom-color: rgba(255,255,255,.25); }
+.ecran .bloc .etiquette { color: rgba(255,255,255,.85); }
+.ecran label.case { display: flex; gap: 12px; align-items: flex-start; font-size: 18px; font-weight: 600; padding: 8px 0; cursor: pointer; }
+.ecran label.case input { width: 28px; height: 28px; flex: 0 0 auto; }
+.ecran .btn { border-color: #fff; background: #fff; color: var(--texte); }
+.ecran .btn.contour { background: transparent; color: #fff; }
+#ecranUrgence { background: #a50e18; }
+#ecranErreur { background: #b8400d; }
+#ecranDemande { background: #0b5e57; }
+.choix-erreur { display: grid; gap: 8px; }
+.choix-erreur label { display: flex; gap: 12px; align-items: center; padding: 12px; border-radius: 10px; border: 2px solid rgba(255,255,255,.5); font-size: 19px; font-weight: 700; cursor: pointer; }
+.choix-erreur input { width: 24px; height: 24px; }
+.choix-erreur label:has(input:checked) { background: rgba(255,255,255,.2); border-color: #fff; }
+.cause-presente { color: #ffd1d1; font-weight: 800; }
+.cause-absente { color: #c6f6d5; font-weight: 800; }
+
+/* === BOÎTE DE CONFIRMATION === */
+.voile { position: fixed; inset: 0; z-index: 80; display: none; background: rgba(5,8,15,.6); padding: 16px; overflow-y: auto; }
+.voile.visible { display: flex; align-items: center; justify-content: center; }
+.boite { background: #fff; color: var(--texte); border-radius: 14px; padding: 18px; width: 100%; max-width: 480px; box-shadow: 0 10px 40px rgba(0,0,0,.35); }
+.boite h3 { margin: 0 0 8px; font-size: 22px; }
+.boite p { margin: 8px 0; }
+.boite .avert { background: var(--alerte-fond); border-left: 4px solid var(--orange); padding: 8px 10px; border-radius: 6px; font-weight: 600; }
+.boite label.case { display: flex; gap: 10px; align-items: flex-start; font-weight: 600; margin: 12px 0; cursor: pointer; }
+.boite label.case input { width: 24px; height: 24px; flex: 0 0 auto; }
+
+/* === PARAMÈTRES === */
+fieldset { border: 1px solid var(--bord); border-radius: var(--rayon); background: var(--carte); margin: 12px 0; padding: 8px 14px 12px; }
+legend { font-weight: 800; padding: 0 6px; }
+.champ { display: grid; grid-template-columns: 1fr; gap: 4px; padding: 10px 0; border-bottom: 1px dashed #e1e4ea; }
+.champ:last-child { border-bottom: none; }
+@media (min-width: 720px) { .champ { grid-template-columns: minmax(200px, 1.2fr) minmax(160px, 1fr) minmax(140px, .8fr); align-items: center; } }
+.champ label { font-weight: 700; }
+.champ label .secu { color: var(--orange); font-size: 13px; margin-left: 6px; }
+.champ .saisie { display: flex; gap: 6px; align-items: center; }
+.champ input, .champ select { width: 100%; min-height: 44px; padding: 6px 10px; border: 2px solid var(--bord); border-radius: 8px; background: #fff; font-size: 18px; font-weight: 700; }
+.champ input:focus, .champ select:focus { outline: 3px solid #93b4ff; border-color: var(--bleu); }
+.champ.modifie input, .champ.modifie select { border-color: var(--bleu); background: #eef3ff; }
+.champ .unite { min-width: 44px; color: var(--texte-2); font-weight: 700; }
+.champ .retour { font-size: 14px; color: var(--texte-2); }
+.champ .retour.ok { color: var(--vert); font-weight: 700; }
+.champ .retour.borne { color: var(--orange); font-weight: 700; }
+.champ .retour.refus { color: var(--rouge); font-weight: 700; }
+.verrou { padding: 10px 12px; border-radius: 8px; background: var(--alerte-fond); border: 1px solid #f3c39d; font-weight: 600; margin-top: 12px; }
+.collant-bas { position: sticky; bottom: 92px; z-index: 10; background: rgba(244,245,247,.97); padding: 10px 0; border-top: 1px solid var(--bord); }
+
+/* === COURBES === */
+.graphe { width: 100%; height: 240px; display: block; }
+.legende { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; font-weight: 600; color: var(--texte-2); margin-top: 6px; }
+.legende i { display: inline-block; width: 18px; height: 4px; vertical-align: middle; margin-right: 5px; border-radius: 2px; }
+.segment { display: inline-flex; border: 2px solid var(--accent); border-radius: 10px; overflow: hidden; }
+.segment button { min-height: 44px; padding: 6px 14px; border: none; background: #fff; font-weight: 700; cursor: pointer; }
+.segment button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+
+/* === JOURNAL === */
+.journal { font: 13px/1.45 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; max-height: 60vh; overflow-y: auto; background: #0e1116; color: #e6edf3; border-radius: 10px; padding: 8px 10px; }
+.journal div { white-space: pre-wrap; word-break: break-word; border-bottom: 1px solid #1f2630; padding: 2px 0; }
+.journal .h { color: #8b949e; margin-right: 8px; }
+.journal .ack-ok { color: #7ee787; } .journal .ack-non { color: #ff7b72; }
+.journal .etat { color: #79c0ff; font-weight: 700; } .journal .cmd { color: #d2a8ff; } .journal .sys { color: #f2cc60; }
+.filtres { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0; font-weight: 600; }
+.filtres label { display: flex; gap: 6px; align-items: center; }
+
+.toast { position: fixed; left: 50%; bottom: 100px; transform: translateX(-50%); z-index: 90; max-width: calc(100% - 32px); padding: 10px 16px; border-radius: 10px; background: #111827; color: #fff; font-weight: 600; box-shadow: var(--ombre); opacity: 0; pointer-events: none; transition: opacity .25s; }
+.toast.visible { opacity: 1; }
+.toast.erreur { background: var(--rouge); }
+.cache { display: none !important; }
+.aide { font-size: 14px; color: var(--texte-2); margin: 6px 0 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- === BARRE DE LIAISON === -->
+<header class="barre">
+  <h1>Séchoir hybride</h1>
+  <span id="pLiaison" class="pastille">Non connecté</span>
+  <span id="pPilote" class="pastille cache">Pilote</span>
+  <button id="btnMain" class="btn-barre cache" type="button">Prendre la main</button>
+  <button id="btnUsb" class="btn-barre" type="button">Connecter USB</button>
+  <button id="btnWifi" class="btn-barre cache" type="button">Reconnecter Wi-Fi</button>
+  <button id="btnDemo" class="btn-barre" type="button">Mode démo</button>
+  <button id="btnDeconnecter" class="btn-barre cache" type="button">Déconnecter</button>
+</header>
+
+<div id="alerteLiaison" class="alerte-liaison" role="alert">Liaison perdue — le Mega continue seul, avec toutes ses sécurités.</div>
+
+<div id="avisDemo" class="avis-demo" aria-label="Commandes du mode démo">
+  <strong>Démo (séchoir simulé, temps ×10) :</strong>
+  <button type="button" data-demo="soleil" aria-pressed="false">Soleil fort</button>
+  <button type="button" data-demo="pression" aria-pressed="false">Réservoir H2 vide</button>
+  <button type="button" data-demo="allumeur" aria-pressed="false">Panne d'allumeur</button>
+  <button type="button" data-demo="fuite" aria-pressed="false">Fuite H2</button>
+  <button type="button" data-demo="au" aria-pressed="false">Arrêt d'urgence enfoncé</button>
+  <button type="button" data-demo="fin">Atteindre la durée max</button>
+</div>
+
+<!-- === BANDEAU D'ÉTAT === -->
+<section id="bandeau" class="bandeau etat-x" aria-live="polite">
+  <div class="nom-etat" id="bNom">—</div>
+  <div class="detail" id="bDetail">En attente de la liaison avec le Mega</div>
+  <div class="chrono chiffre" id="bChrono"></div>
+</section>
+
+<nav class="onglets" role="tablist" aria-label="Sections">
+  <button role="tab" aria-selected="true" data-onglet="tableau">Tableau de bord</button>
+  <button role="tab" aria-selected="false" data-onglet="commande">Commande</button>
+  <button role="tab" aria-selected="false" data-onglet="parametres">Paramètres</button>
+  <button role="tab" aria-selected="false" data-onglet="courbes">Courbes</button>
+  <button role="tab" aria-selected="false" data-onglet="journal">Journal</button>
+</nav>
+
+<main>
+  <!-- === ONGLET 1 : TABLEAU DE BORD === -->
+  <section id="o-tableau" class="panneau actif" role="tabpanel">
+    <div class="grille">
+      <div class="carte">
+        <h2>Température de la chambre</h2>
+        <div class="gros chiffre"><span id="dTsec">—</span><small> °C</small></div>
+        <div class="etiquette">Consigne <strong class="chiffre" id="dTc">—</strong> °C · repère <strong id="dRegime">—</strong></div>
+        <div class="jauge" id="jauge" aria-hidden="true"></div>
+        <div class="etiquette chiffre" id="dSeuils">T1 — · T2 — · T3 —</div>
+      </div>
+      <div class="carte">
+        <h2>Source et puissance</h2>
+        <div class="moyen" id="dSource">—</div>
+        <div class="moyen chiffre" id="dPalier">—</div>
+        <div class="ligne-info"><span class="etiquette">Mode</span><span id="dMode">—</span></div>
+        <div class="ligne-info"><span class="etiquette">Régulation</span><span id="dRegul">—</span></div>
+        <div class="ligne-info"><span class="etiquette">Purge restante</span><span class="chiffre" id="dPurge">—</span></div>
+      </div>
+      <div class="carte">
+        <h2>Humidité (fin de cycle)</h2>
+        <div class="moyen chiffre"><span id="dHsec">—</span> % <span class="etiquette" style="font-size:18px">air extrait</span></div>
+        <div class="niveau" id="nHsec"><i></i><b></b></div>
+        <div class="ligne-info"><span class="etiquette">Seuil de fin H_fin</span><span class="chiffre" id="dHfin">—</span></div>
+        <div class="ligne-info"><span class="etiquette">Durée min avant fin</span><span class="chiffre" id="dTmf">—</span></div>
+      </div>
+      <div class="carte">
+        <h2>Sécurité gaz</h2>
+        <div class="ligne-info"><span class="etiquette">Flamme</span><span id="dFlamme">—</span></div>
+        <div class="ligne-info"><span class="etiquette">Pression H2</span><span class="chiffre" id="dPh2">—</span></div>
+        <div class="etiquette">Détecteur H2 (MQ-8) <strong class="chiffre" id="dMq8">—</strong></div>
+        <div class="niveau" id="nMq8"><i></i><b></b></div>
+        <div class="etiquette">Détecteur GPL (MQ-6) <strong class="chiffre" id="dMq6">—</strong></div>
+        <div class="niveau" id="nMq6"><i></i><b></b></div>
+        <div class="ligne-info"><span class="etiquette">Arrêt d'urgence (D42)</span><span id="dAu">—</span></div>
+      </div>
+      <div class="carte">
+        <h2>Air extérieur et solaire</h2>
+        <div class="ligne-info"><span class="etiquette">T ambiante</span><span class="chiffre" id="dTamb">—</span></div>
+        <div class="ligne-info"><span class="etiquette">H ambiante</span><span class="chiffre" id="dHamb">—</span></div>
+        <div class="ligne-info"><span class="etiquette">T capteur estimée</span><span class="chiffre" id="dTcap">—</span></div>
+        <div class="ligne-info"><span class="etiquette">Seuils solaire ON / OFF</span><span class="chiffre" id="dSol">—</span></div>
+        <div class="ligne-info"><span class="etiquette">Sonde plaque (affichage)</span><span class="chiffre" id="dTcapm">—</span></div>
+        <div class="ligne-info"><span class="etiquette">Grandeurs fixes</span><span id="dFixes">—</span></div>
+      </div>
+      <div class="carte">
+        <h2>Chronomètres</h2>
+        <div class="ligne-info"><span class="etiquette">Temps de cycle</span><span class="chiffre" id="dTcy">—</span></div>
+        <div class="ligne-info"><span class="etiquette">Durée maximale</span><span class="chiffre" id="dTmax">—</span></div>
+        <div class="ligne-info"><span class="etiquette">Prolongation</span><span class="chiffre" id="dProl">—</span></div>
+        <div class="ligne-info"><span class="etiquette">Refroidissement</span><span class="chiffre" id="dTref">—</span></div>
+        <div class="ligne-info"><span class="etiquette">Échecs d'allumage / pertes de flamme</span><span class="chiffre" id="dEchecs">—</span></div>
+      </div>
+      <div class="carte large">
+        <h2>Sorties (lecture seule)</h2>
+        <div class="voyants">
+          <div class="voyant chaud" id="vVh2">V_H2</div>
+          <div class="voyant chaud" id="vVbut">V_But</div>
+          <div class="voyant chaud" id="vEv1">EV1</div>
+          <div class="voyant chaud" id="vEv2">EV2</div>
+          <div class="voyant chaud" id="vEv3">EV3</div>
+          <div class="voyant chaud" id="vSpk">Étincelle</div>
+          <div class="voyant alarme" id="vBuz">Buzzer</div>
+        </div>
+        <div class="grille" style="margin-top:8px">
+          <div><span class="etiquette">Ventil. purge</span> <strong class="chiffre" id="dPwmp">—</strong><div class="niveau" id="nPwmp"><i></i></div></div>
+          <div><span class="etiquette">Ventil. distribution</span> <strong class="chiffre" id="dPwmd">—</strong><div class="niveau" id="nPwmd"><i></i></div></div>
+          <div><span class="etiquette">Ventil. extraction</span> <strong class="chiffre" id="dPwme">—</strong><div class="niveau" id="nPwme"><i></i></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- === ONGLET 2 : COMMANDE === -->
+  <section id="o-commande" class="panneau" role="tabpanel">
+    <div class="grille">
+      <div class="carte">
+        <h2>Cycle de séchage</h2>
+        <p class="aide" id="aideStart">START est accepté à l'arrêt (attente ou séchage terminé).</p>
+        <div class="rangee" style="margin-top:10px">
+          <button class="btn vert" id="btnStart" type="button">START — démarrer un cycle</button>
+        </div>
+        <p class="aide">STOP (en bas de l'écran) arrête proprement le cycle : gaz fermé, puis refroidissement.</p>
+      </div>
+      <div class="carte">
+        <h2>Consigne en cours de cycle</h2>
+        <div class="reglage">
+          <button class="btn" id="btnTcMoins" type="button" aria-label="Baisser la consigne de 1 °C">−</button>
+          <div class="valeur chiffre"><span id="cTc">—</span><small style="font-size:20px"> °C</small></div>
+          <button class="btn" id="btnTcPlus" type="button" aria-label="Monter la consigne de 1 °C">+</button>
+        </div>
+        <p class="aide" id="aideTc">Comme UP / DOWN au pupitre : seuils recalculés aussitôt, consigne enregistrée.</p>
+      </div>
+      <div class="carte">
+        <h2>Demande de prolongation</h2>
+        <p id="cDemande" class="aide">Aucune demande en cours.</p>
+        <button class="btn" id="btnOuvrirDemande" type="button" disabled>Afficher la demande</button>
+      </div>
+      <div class="carte">
+        <h2>Configuration active</h2>
+        <div class="ligne-info"><span class="etiquette">Mode</span><span id="cMode">—</span></div>
+        <div class="ligne-info"><span class="etiquette">Source (manuel)</span><span id="cChoix">—</span></div>
+        <div class="ligne-info"><span class="etiquette">Durée max</span><span class="chiffre" id="cDmax">—</span></div>
+        <div class="ligne-info"><span class="etiquette">Pupitre local</span><span id="cLcd">—</span></div>
+        <p class="aide">Pour changer ces réglages : onglet Paramètres (hors cycle).</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- === ONGLET 3 : PARAMÈTRES === -->
+  <section id="o-parametres" class="panneau" role="tabpanel">
+    <div id="verrouParams" class="verrou">Connectez le Mega pour lire les paramètres.</div>
+    <form id="formParams" autocomplete="off" onsubmit="return false"></form>
+    <div class="collant-bas rangee">
+      <button class="btn plein" id="btnEnvoyer" type="button" disabled>Envoyer les modifications</button>
+      <button class="btn" id="btnSave" type="button" disabled>Enregistrer en EEPROM</button>
+      <button class="btn" id="btnRelire" type="button" disabled>Relire</button>
+      <span id="etatEeprom" class="aide"></span>
+    </div>
+  </section>
+
+  <!-- === ONGLET 4 : COURBES === -->
+  <section id="o-courbes" class="panneau" role="tabpanel">
+    <div class="rangee" style="margin-top:12px">
+      <div class="segment" role="group" aria-label="Fenêtre de temps">
+        <button type="button" data-fenetre="900" aria-pressed="false">15 min</button>
+        <button type="button" data-fenetre="7200" aria-pressed="true">2 h</button>
+        <button type="button" data-fenetre="0" aria-pressed="false">Tout</button>
+      </div>
+      <button class="btn" id="btnCsv" type="button">Exporter CSV</button>
+      <span class="aide" id="nbTrames">0 trame</span>
+    </div>
+    <div class="grille">
+      <div class="carte large">
+        <h2>Température de la chambre</h2>
+        <canvas class="graphe" id="gT"></canvas>
+        <div class="legende"><span><i style="background:#c1121f"></i>T_sec</span><span><i style="background:#0b0d12"></i>Consigne</span><span><i style="background:#1d4ed8"></i>T1</span><span><i style="background:#6d28d9"></i>T2</span><span><i style="background:#1b7a3a"></i>T3</span></div>
+      </div>
+      <div class="carte">
+        <h2>Humidité</h2>
+        <canvas class="graphe" id="gH"></canvas>
+        <div class="legende"><span><i style="background:#1d4ed8"></i>H_sec</span><span><i style="background:#d9480f"></i>H_fin</span></div>
+      </div>
+      <div class="carte">
+        <h2>Palier du brûleur</h2>
+        <canvas class="graphe" id="gP"></canvas>
+        <div class="legende"><span><i style="background:#d9480f"></i>Palier (%)</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- === ONGLET 5 : JOURNAL === -->
+  <section id="o-journal" class="panneau" role="tabpanel">
+    <div class="filtres">
+      <label><input type="checkbox" data-filtre="etat" checked> États</label>
+      <label><input type="checkbox" data-filtre="cmd" checked> Commandes</label>
+      <label><input type="checkbox" data-filtre="ack" checked> Réponses</label>
+      <label><input type="checkbox" data-filtre="dbg" checked> Messages du Mega</label>
+      <label><input type="checkbox" data-filtre="sys" checked> Liaison</label>
+      <button class="btn" id="btnJournal" type="button" style="min-height:40px">Exporter</button>
+    </div>
+    <div class="journal" id="journal" aria-live="off"></div>
+  </section>
+</main>
+
+<!-- === BARRE STOP === -->
+<footer class="stop-barre">
+  <button id="btnStop" type="button">STOP</button>
+  <span class="note">L'arrêt d'urgence câblé reste le seul arrêt de sécurité sur place.</span>
+</footer>
+
+<!-- === ÉCRAN URGENCE ATEX === -->
+<section id="ecranUrgence" class="ecran" role="alertdialog" aria-labelledby="uTitre">
+  <div class="contenu">
+    <h2 id="uTitre">URGENCE ATEX</h2>
+    <div class="sous-titre" id="uCause">—</div>
+    <div class="bloc">
+      <div class="ligne-info"><span class="etiquette">Gaz</span><span>fermé · ventilation de purge maximale</span></div>
+      <div class="ligne-info"><span class="etiquette">Détecteur H2 (MQ-8)</span><span id="uMq8">—</span></div>
+      <div class="ligne-info"><span class="etiquette">Détecteur GPL (MQ-6)</span><span id="uMq6">—</span></div>
+      <div class="ligne-info"><span class="etiquette">Arrêt d'urgence</span><span id="uAu">—</span></div>
+      <div class="ligne-info"><span class="etiquette">Flamme</span><span id="uFl">—</span></div>
+    </div>
+    <div class="bloc" id="uConsigne">—</div>
+    <label class="case"><input type="checkbox" id="uCoche"> J'ai vérifié sur place : plus de fuite, arrêt d'urgence déverrouillé, flamme éteinte.</label>
+    <div class="rangee">
+      <button class="btn" id="btnRearm" type="button" disabled>Réarmer</button>
+    </div>
+    <p class="aide" style="color:#fff" id="uRetour"></p>
+  </div>
+</section>
+
+<!-- === ÉCRAN ERREUR DE COMBUSTION === -->
+<section id="ecranErreur" class="ecran" role="alertdialog" aria-labelledby="eTitre">
+  <div class="contenu">
+    <h2 id="eTitre">ÉCHEC D'ALLUMAGE</h2>
+    <div class="sous-titre" id="eDetail">—</div>
+    <div class="bloc"><strong>Vérifier sur place l'allumeur, l'arrivée de gaz et la flamme</strong> avant de choisir. Le gaz est fermé ; le buzzer sonne.</div>
+    <div class="choix-erreur" role="radiogroup" aria-label="Reprise">
+      <label><input type="radio" name="choixErreur" value="REESSAYER" checked> Réessayer (purge puis nouvel allumage)</label>
+      <label><input type="radio" name="choixErreur" value="MANUEL"> Passer en manuel (retour à l'attente)</label>
+      <label><input type="radio" name="choixErreur" value="AUTO"> Automatique (purge puis reprise)</label>
+    </div>
+    <label class="case"><input type="checkbox" id="eCoche"> J'ai vérifié sur place l'allumeur, l'arrivée de gaz et la flamme.</label>
+    <div class="rangee">
+      <button class="btn" id="btnErreur" type="button" disabled>Valider le choix</button>
+    </div>
+    <p class="aide" style="color:#fff" id="eRetour"></p>
+  </div>
+</section>
+
+<!-- === ÉCRAN DEMANDE DE PROLONGATION === -->
+<section id="ecranDemande" class="ecran" role="alertdialog" aria-labelledby="dTitre">
+  <div class="contenu">
+    <h2 id="dTitre">Fin de séchage atteinte</h2>
+    <div class="sous-titre" id="dMotif">—</div>
+    <div class="bloc">Sans réponse, le séchage se termine dans <strong class="chiffre" id="dRebours">—</strong> (brûleur coupé). La régulation continue pendant la question.</div>
+    <div class="reglage" style="margin:16px 0">
+      <button class="btn" id="btnNMoins" type="button" aria-label="Moins 5 minutes">−</button>
+      <div class="valeur chiffre"><span id="dN">—</span><small style="font-size:20px"> min</small></div>
+      <button class="btn" id="btnNPlus" type="button" aria-label="Plus 5 minutes">+</button>
+    </div>
+    <div class="rangee">
+      <button class="btn" id="btnProlonger" type="button">Prolonger</button>
+      <button class="btn contour" id="btnTerminer" type="button">Terminer le séchage</button>
+      <button class="btn contour" id="btnPlusTard" type="button">Masquer</button>
+    </div>
+    <p class="aide" style="color:#fff" id="dRetour"></p>
+  </div>
+</section>
+
+<!-- === CONFIRMATION === -->
+<div class="voile" id="voile">
+  <div class="boite" role="dialog" aria-modal="true" aria-labelledby="cfTitre">
+    <h3 id="cfTitre">Confirmer</h3>
+    <div id="cfTexte"></div>
+    <label class="case cache" id="cfCaseL"><input type="checkbox" id="cfCase"> <span id="cfCaseTexte"></span></label>
+    <div class="rangee" style="justify-content:flex-end;margin-top:12px">
+      <button class="btn" id="cfNon" type="button">Annuler</button>
+      <button class="btn plein" id="cfOui" type="button">Confirmer</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+'use strict';
+
+/* === CONSTANTES DU PROTOCOLE (docs/PROTOCOLE.md) === */
+const NOMS_ETATS = ['ATTENTE', 'MENU LOCAL', 'SOLAIRE', 'HYDROGÈNE', 'GPL', 'DEMANDE DE PROLONGATION',
+                    'PROLONGATION', 'SÉCHAGE TERMINÉ', 'ERREUR DE COMBUSTION', 'URGENCE ATEX'];
+const E = { ATTENTE: 0, MENU: 1, SOLAIRE: 2, H2: 3, GPL: 4, DEMANDE: 5, PROLONG: 6, TERMINE: 7, ERREUR: 8, URGENCE: 9 };
+const CAUSES = ['—', 'Fuite d\'hydrogène (MQ-8)', 'Fuite de GPL (MQ-6)', 'Arrêt d\'urgence enfoncé',
+                'Perte de flamme répétée', 'Flamme vue alors que le gaz est fermé'];
+const MOTIFS = ['Humidité de fin atteinte', 'Durée maximale de séchage atteinte', 'Prolongation écoulée'];
+const PALIERS = ['100 %', '67 %', '33 %', '0 %'];
+const DELAI_PERTE_MS = 3000;     // aucune trame pendant 3 s : liaison perdue
+const PORT_WS = 81;              // WebSocket de la passerelle ESP32
+
+/* === ÉTAT DE LA PAGE === */
+const S = {
+  transport: null,        // objet { envoyer(ligne), fermer(), nom }
+  tel: null,              // dernière télémesure
+  meta: null,             // description des 31 paramètres (GET META)
+  cfg: null,              // valeurs des paramètres (GET CFG)
+  pilote: true,           // false : lecture seule (autre client pilote sur l'ESP32)
+  derniereTrame: 0,
+  perdue: false,
+  etatPrec: null,
+  attentes: [],           // commandes en attente d'accusé de réception
+  trames: [],             // historique pour courbes et CSV
+  journal: [],
+  nonSauve: false,
+  dernierGet: 0,
+};
+
+const $ = (id) => document.getElementById(id);
+const fmt = (v, d = 1) => (v === undefined || v === null || Number.isNaN(+v)) ? '—' : (+v).toFixed(d).replace('.', ',');
+const duree = (s) => {
+  if (s === undefined || s === null || s < 0) return '—';
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  return h > 0 ? `${h} h ${String(m).padStart(2, '0')} min` : `${m} min ${String(x).padStart(2, '0')} s`;
+};
+const heure = (d = new Date()) => d.toLocaleTimeString('fr-FR', { hour12: false });
+
+/* === JOURNAL === */
+function journaliser(type, texte) {
+  const e = { d: new Date(), type, texte };
+  S.journal.push(e);
+  if (S.journal.length > 5000) S.journal.splice(0, 1000);
+  ajouterLigneJournal(e);
+}
+const filtresJournal = { etat: true, cmd: true, ack: true, dbg: true, sys: true };
+function classeJournal(e) {
+  if (e.type === 'ack') return e.ok ? 'ack-ok' : 'ack-non';
+  return { etat: 'etat', cmd: 'cmd', sys: 'sys' }[e.type] || '';
+}
+function ajouterLigneJournal(e) {
+  if (!filtresJournal[e.type]) return;
+  const div = document.createElement('div');
+  const h = document.createElement('span');
+  h.className = 'h';
+  h.textContent = heure(e.d);
+  const t = document.createElement('span');
+  t.className = classeJournal(e);
+  t.textContent = e.texte;
+  div.append(h, t);
+  const j = $('journal');
+  j.prepend(div);
+  while (j.childElementCount > 600) j.lastElementChild.remove();
+}
+function redessinerJournal() {
+  $('journal').textContent = '';
+  S.journal.slice(-600).forEach(ajouterLigneJournal);
+}
+
+/* === MESSAGES COURTS === */
+let minuteurToast = 0;
+function toast(texte, erreur = false) {
+  const t = $('toast');
+  t.textContent = texte;
+  t.classList.toggle('erreur', erreur);
+  t.classList.add('visible');
+  clearTimeout(minuteurToast);
+  minuteurToast = setTimeout(() => t.classList.remove('visible'), 3500);
+}
+
+/* === SON ET VIBRATION (alarmes) === */
+let audio = null;
+function preparerSon() {
+  try { if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === 'suspended') audio.resume(); } catch (e) { audio = null; }
+}
+function bip(motif) {
+  try { if (navigator.vibrate) navigator.vibrate(motif === 'urgence' ? [400, 150, 400, 150, 400] : [250, 120, 250]); } catch (e) { /* non disponible */ }
+  if (!audio) return;
+  const notes = motif === 'urgence' ? [880, 660, 880, 660] : motif === 'erreur' ? [700, 520, 700] : [600, 800];
+  let t = audio.currentTime;
+  notes.forEach((f) => {
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.frequency.value = f; o.type = 'square';
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.25, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+    o.connect(g).connect(audio.destination); o.start(t); o.stop(t + 0.25);
+    t += 0.28;
+  });
+}
+
+/* === ENVOI DES COMMANDES ===
+ * Chaque commande attend son accusé de réception ({"t":"ack","cmd":...}).
+ * Sans réponse en 4 s : échec signalé, rien n'est rejoué automatiquement. */
+function envoyer(ligne) {
+  const cmd = ligne.trim().split(/\s+/)[0].toUpperCase();
+  if (!S.transport) {
+    if (cmd !== 'GET' && cmd !== 'PING') toast('Pas de liaison avec le Mega', true);
+    return Promise.resolve({ ok: false, raison: 'pas de liaison' });
+  }
+  const modifie = !['PING', 'GET', 'PILOTE'].includes(cmd);
+  if (modifie && !S.pilote && cmd !== 'STOP') {
+    toast('Lecture seule : un autre appareil pilote. « Prendre la main » d\'abord.', true);
+    return Promise.resolve({ ok: false, raison: 'lecture seule' });
+  }
+  return new Promise((resolve) => {
+    const attente = { cmd, resolve, minuteur: setTimeout(() => {
+      S.attentes = S.attentes.filter((a) => a !== attente);
+      journaliser('ack', `${cmd} : pas de réponse du Mega`);
+      resolve({ ok: false, raison: 'pas de réponse du Mega' });
+    }, 4000) };
+    S.attentes.push(attente);
+    if (cmd !== 'GET' && cmd !== 'PING') journaliser('cmd', '→ ' + ligne);
+    try { S.transport.envoyer(ligne); }
+    catch (e) { clearTimeout(attente.minuteur); S.attentes = S.attentes.filter((a) => a !== attente); resolve({ ok: false, raison: 'envoi impossible' }); }
+  });
+}
+
+/* === RÉCEPTION === */
+function recevoirLigne(ligne) {
+  ligne = ligne.replace(/\r$/, '');
+  if (!ligne) return;
+  S.derniereTrame = Date.now();
+  if (S.perdue) { S.perdue = false; majLiaison(); journaliser('sys', 'Liaison rétablie'); demanderEtatComplet(); }
+  if (ligne[0] !== '{') { journaliser('dbg', ligne); return; }
+  let m;
+  try { m = JSON.parse(ligne); } catch (e) { journaliser('dbg', ligne); return; }
+  switch (m.t) {
+    case 'tel':    recevoirTelemesure(m); break;
+    case 'cfg':    S.cfg = m; majParametresValeurs(); majCommande(); break;
+    case 'meta':   S.meta = m.champs; construireParametres(); if (S.cfg) majParametresValeurs(); break;
+    case 'ack':    recevoirAck(m); break;
+    case 'pilote': S.pilote = !!m.vous; majLiaison(); journaliser('sys', S.pilote ? 'Vous pilotez le séchoir' : `Lecture seule (${m.n || '?'} appareils connectés)`); break;
+    default:       journaliser('dbg', ligne);
+  }
+}
+
+function recevoirAck(m) {
+  const i = S.attentes.findIndex((a) => a.cmd === m.cmd);
+  const txt = `${m.cmd} : ${m.ok ? 'accepté' : 'refusé'}${m.val ? ' — ' + m.val : ''}${m.raison && !(m.cmd === 'SET' && m.ok) ? ' (' + m.raison + ')' : ''}`;
+  const e = { d: new Date(), type: 'ack', texte: txt, ok: m.ok };
+  S.journal.push(e); ajouterLigneJournal(e);
+  if (i >= 0) {
+    const a = S.attentes.splice(i, 1)[0];
+    clearTimeout(a.minuteur);
+    a.resolve(m);
+  }
+}
+
+function demanderEtatComplet() {
+  S.dernierGet = Date.now();
+  envoyer('GET META').then(() => { if (S.transport) envoyer('GET CFG'); });
+}
+
+/* === TÉLÉMESURE === */
+function recevoirTelemesure(t) {
+  const prec = S.tel;
+  S.tel = t;
+  if (S.etatPrec !== t.e) {
+    journaliser('etat', `État : ${NOMS_ETATS[t.e] || t.etat}`);
+    if (t.e === E.URGENCE) bip('urgence');
+    else if (t.e === E.ERREUR) bip('erreur');
+    else if (t.e === E.DEMANDE) bip('demande');
+    if (t.e !== E.DEMANDE) demandeMasquee = false;
+    if (prec && (S.etatPrec === E.ERREUR || S.etatPrec === E.URGENCE)) { $('uCoche').checked = false; $('eCoche').checked = false; }
+    S.etatPrec = t.e;
+  }
+  /* Le Mega redémarre à l'ouverture du port USB : on relit la description. */
+  if ((!S.meta || !S.cfg) && Date.now() - S.dernierGet > 3000) demanderEtatComplet();
+  memoriserTrame(t);
+  majBandeau(t);
+  majTableau(t);
+  majCommande();
+  majEcrans(t);
+  majVerrouParametres();
+  if (ongletActif === 'courbes') dessinerCourbes();
+}
+
+/* === AFFICHAGE : BANDEAU === */
+function nomPalier(t) {
+  if (t.src === 'SOLAIRE') return 'brûleur arrêté';
+  if (t.ph === 'PURGE') return 'purge';
+  if (t.ph === 'ALLUMAGE') return 'allumage ' + PALIERS[t.pal];
+  if (t.ph === '0% (veille)') return 'veille 0 %';
+  return t.ph.replace('%', ' %');
+}
+function majBandeau(t) {
+  const b = $('bandeau');
+  b.className = 'bandeau etat-' + (t.e >= 0 && t.e <= 9 ? t.e : 'x');
+  $('bNom').textContent = NOMS_ETATS[t.e] || t.etat;
+  let detail = '';
+  if ([E.SOLAIRE, E.H2, E.GPL, E.DEMANDE, E.PROLONG].includes(t.e)) detail = `${t.src === 'SOLAIRE' ? 'Solaire' : t.src} · ${nomPalier(t)} · T_sec ${fmt(t.tsec)} °C → ${fmt(t.tc)} °C`;
+  else if (t.e === E.ERREUR) detail = `${t.ech} échecs d'allumage (${t.src}) — intervention sur place`;
+  else if (t.e === E.URGENCE) detail = CAUSES[t.urg] || 'Urgence';
+  else if (t.e === E.TERMINE) detail = `Refroidissement · H_sec ${fmt(t.hsec)} %`;
+  else detail = `T_sec ${fmt(t.tsec)} °C · ${t.auto ? 'automatique' : 'manuel'} · prêt`;
+  $('bDetail').textContent = detail;
+  let chrono = '';
+  if (t.e === E.DEMANDE) chrono = `${duree(t.trep)}<small>avant la fin automatique</small>`;
+  else if (t.e === E.PROLONG) chrono = `${duree(t.tprol)}<small>sur ${t.nprol} min de prolongation</small>`;
+  else if (t.tcy >= 0) chrono = `${duree(t.tcy)}<small>de cycle</small>`;
+  else if (t.e === E.TERMINE) chrono = `${duree(t.tref)}<small>de refroidissement</small>`;
+  $('bChrono').innerHTML = chrono;
+}
+
+/* === AFFICHAGE : TABLEAU DE BORD === */
+function niveau(id, valeur, max, seuil) {
+  const n = $(id);
+  const p = Math.max(0, Math.min(100, (valeur / max) * 100));
+  n.querySelector('i').style.width = p + '%';
+  const b = n.querySelector('b');
+  if (b) { if (seuil === undefined) b.style.display = 'none'; else { b.style.display = ''; b.style.left = Math.max(0, Math.min(100, (seuil / max) * 100)) + '%'; } }
+  n.classList.toggle('danger', seuil !== undefined && valeur > seuil);
+}
+function voyant(id, on) { $(id).classList.toggle('on', !!on); }
+function badge(texte, classe) { return `<span class="badge ${classe}">${texte}</span>`; }
+
+function majJauge(t) {
+  const j = $('jauge');
+  const min = Math.min(20, Math.floor(t.tsec / 10) * 10), max = Math.max(Math.ceil((t.t3 + 15) / 10) * 10, Math.ceil((t.tsec + 5) / 10) * 10);
+  const x = (v) => ((v - min) / (max - min)) * 100;
+  const demi = (t.hh || 5) / 2;
+  j.innerHTML =
+    `<div class="bande" style="left:${x(t.t3 - demi)}%;width:${x(t.t3 + demi) - x(t.t3 - demi)}%"></div>` +
+    [['T1', t.t1], ['T2', t.t2], ['T3', t.t3]].map(([n, v]) => `<div class="repere" style="left:${x(v)}%"><span>${n}</span></div>`).join('') +
+    `<div class="curseur" style="left:${Math.max(0, Math.min(100, x(t.tsec)))}%"></div>`;
+}
+
+function majTableau(t) {
+  $('dTsec').textContent = fmt(t.tsec);
+  $('dTc').textContent = fmt(t.tc);
+  $('dRegime').textContent = t.chaud ? 'CHAUD' : 'FROID';
+  $('dSeuils').textContent = `T1 ${fmt(t.t1)} · T2 ${fmt(t.t2)} · T3 ${fmt(t.t3)} °C · hystérésis ${fmt(t.hh)} °C`;
+  majJauge(t);
+  $('dSource').textContent = t.src === 'SOLAIRE' ? 'Solaire' : (t.src === 'H2' ? 'Hydrogène' : 'GPL');
+  $('dPalier').textContent = nomPalier(t);
+  $('dMode').textContent = t.auto ? 'Automatique' : 'Manuel';
+  $('dRegul').textContent = t.reg ? 'Par T_sec (auto)' : 'Palier imposé ' + PALIERS[t.pimp];
+  $('dPurge').textContent = t.tpur >= 0 ? duree(t.tpur) + (t.postp ? ' (post-purge)' : '') : '—';
+  $('dHsec').textContent = fmt(t.hsec);
+  niveau('nHsec', t.hsec, 100, t.hfin);
+  $('nHsec').classList.remove('danger');
+  $('dHfin').textContent = fmt(t.hfin) + ' %';
+  $('dTmf').textContent = duree(t.tmf);
+  $('dFlamme').innerHTML = t.fl ? badge('PRÉSENTE', 'alerte') : badge('absente', 'ok');
+  $('dPh2').innerHTML = `${fmt(t.ph2)} bar ${t.ph2 < t.ph2min ? badge('basse', 'alerte') : ''}<span class="etiquette"> (min ${fmt(t.ph2min)})</span>`;
+  $('dMq8').textContent = `${t.mq8} / seuil ${t.s8}`;
+  niveau('nMq8', t.mq8, 1023, t.s8);
+  $('dMq6').textContent = `${t.mq6} / seuil ${t.s6}`;
+  niveau('nMq6', t.mq6, 1023, t.s6);
+  $('dAu').innerHTML = t.au ? badge('ENFONCÉ', 'danger') : badge('relâché', 'ok');
+  $('dTamb').textContent = fmt(t.tamb) + ' °C';
+  $('dHamb').textContent = fmt(t.hamb) + ' %';
+  $('dTcap').textContent = fmt(t.tcap) + ' °C';
+  $('dSol').textContent = `${fmt(t.son)} / ${fmt(t.soff)} °C`;
+  $('dTcapm').textContent = fmt(t.tcapm) + ' °C';
+  const fixes = [t.fta && 'T amb', t.fha && 'H amb', t.fhs && 'H séchoir', t.fp && 'P H2'].filter(Boolean);
+  $('dFixes').innerHTML = fixes.length ? badge(fixes.join(', '), 'alerte') : 'aucune (capteurs)';
+  $('dTcy').textContent = t.tcy >= 0 ? duree(t.tcy) : '—';
+  $('dTmax').textContent = duree(t.tmax);
+  $('dProl').textContent = t.e === E.PROLONG ? `${duree(t.tprol)} / ${t.nprol} min` : '—';
+  $('dTref').textContent = t.tref >= 0 ? duree(t.tref) : '—';
+  $('dEchecs').textContent = `${t.ech} / ${t.pf}`;
+  voyant('vVh2', t.vh2); voyant('vVbut', t.vbut); voyant('vEv1', t.ev1); voyant('vEv2', t.ev2);
+  voyant('vEv3', t.ev3); voyant('vSpk', t.spk); voyant('vBuz', t.buz);
+  [['p', t.pwmp], ['d', t.pwmd], ['e', t.pwme]].forEach(([k, v]) => {
+    $('dPwm' + k).textContent = Math.round(v / 2.55) + ' %';
+    niveau('nPwm' + k, v, 255);
+  });
+}
+
+/* === COMMANDE === */
+const enCycleTc = (e) => [E.SOLAIRE, E.H2, E.GPL, E.PROLONG].includes(e);
+function majCommande() {
+  const t = S.tel;
+  const lie = !!S.transport && !!t && !S.perdue;
+  const pilote = lie && S.pilote;
+  const startOk = lie && [E.ATTENTE, E.MENU, E.TERMINE].includes(t.e);
+  $('btnStart').disabled = !(pilote && startOk);
+  $('aideStart').textContent = !lie ? 'Pas de liaison.' : startOk ? 'Prêt à démarrer.' : `START n'agit pas en « ${NOMS_ETATS[t.e]} ».`;
+  const tcOk = pilote && enCycleTc(t.e);
+  $('btnTcMoins').disabled = !tcOk;
+  $('btnTcPlus').disabled = !tcOk;
+  $('cTc').textContent = t ? fmt(t.tc) : '—';
+  $('aideTc').textContent = tcOk || !lie ? 'Comme UP / DOWN au pupitre : seuils recalculés aussitôt, consigne enregistrée.'
+    : 'Réglable pendant le cycle (solaire, H2, GPL, prolongation). Hors cycle : onglet Paramètres.';
+  $('btnStop').disabled = !lie;
+  const dem = lie && t.e === E.DEMANDE;
+  $('btnOuvrirDemande').disabled = !dem;
+  $('cDemande').textContent = dem ? `${MOTIFS[t.motif]} — réponse attendue (${duree(t.trep)}).` : 'Aucune demande en cours.';
+  if (t) {
+    $('cMode').textContent = t.auto ? 'Automatique' : 'Manuel';
+    $('cLcd').textContent = t.lcd ? 'présent (écran + boutons)' : 'absent (interface seule)';
+  }
+  if (S.cfg) {
+    $('cChoix').textContent = ['', 'Solaire', 'Hydrogène', 'GPL'][S.cfg.choix_mode] || '—';
+    $('cDmax').textContent = S.cfg.duree_max + ' min';
+  }
+}
+
+async function commandeStart() {
+  const t = S.tel;
+  const texte = `<p>Mode <strong>${t.auto ? 'automatique' : 'manuel'}</strong>${!t.auto && S.cfg ? ', source <strong>' + ['', 'solaire', 'hydrogène', 'GPL'][S.cfg.choix_mode] + '</strong>' : ''}, consigne <strong>${fmt(t.tc)} °C</strong>.</p>` +
+    '<p>Une purge précède toute ouverture du gaz.</p>' + (S.nonSauve ? '<p class="avert">Des réglages envoyés ne sont pas enregistrés en EEPROM : ils servent pour ce cycle mais seront perdus au redémarrage.</p>' : '');
+  if (!await confirmer('Démarrer un cycle de séchage ?', texte)) return;
+  const r = await envoyer('START');
+  if (!r.ok) toast('START refusé : ' + (r.raison || ''), true);
+}
+async function commandeStop() {
+  const t = S.tel;
+  if (!t) return;
+  const r = await envoyer('STOP');
+  if (r.ok) toast('Arrêt demandé : séchage terminé, gaz fermé');
+  else toast('STOP : ' + (r.raison || 'sans effet'), !String(r.raison).startsWith('sans effet'));
+}
+async function reglerTc(sens) {
+  const t = S.tel;
+  if (!t) return;
+  const v = Math.round((t.tc + sens) * 10) / 10;
+  const r = await envoyer(`SET t_cible ${v}`);
+  if (!r.ok) toast('Consigne refusée : ' + (r.raison || ''), true);
+}
+
+/* === ÉCRANS D'ALARME === */
+let demandeMasquee = false;
+function majEcrans(t) {
+  /* --- Urgence --- */
+  const urg = t.e === E.URGENCE;
+  $('ecranUrgence').classList.toggle('visible', urg);
+  if (urg) {
+    $('uCause').textContent = 'Cause : ' + (CAUSES[t.urg] || '—');
+    const etat = (presente, txt) => `<span class="${presente ? 'cause-presente' : 'cause-absente'}">${txt}</span>`;
+    $('uMq8').innerHTML = etat(t.mq8 > t.s8, `${t.mq8} / ${t.s8} — ${t.mq8 > t.s8 ? 'FUITE' : 'normal'}`);
+    $('uMq6').innerHTML = etat(t.mq6 > t.s6, `${t.mq6} / ${t.s6} — ${t.mq6 > t.s6 ? 'FUITE' : 'normal'}`);
+    $('uAu').innerHTML = etat(t.au, t.au ? 'ENFONCÉ (à déverrouiller sur place)' : 'relâché');
+    $('uFl').innerHTML = etat(t.fl, t.fl ? 'ENCORE DÉTECTÉE' : 'éteinte');
+    $('uConsigne').innerHTML = t.urgp
+      ? '<strong>Cause encore présente :</strong> le réarmement est impossible. Ventiler, supprimer la cause sur place' + (t.au ? ', déverrouiller l\'arrêt d\'urgence' : '') + '.'
+      : '<strong>Cause disparue.</strong> Après vérification sur place, le réarmement ramène le séchoir à l\'attente (le cycle n\'est pas repris).';
+    $('btnRearm').disabled = !(t.urgp === 0 && $('uCoche').checked && S.pilote && !S.perdue);
+  }
+  /* --- Erreur de combustion --- */
+  const err = t.e === E.ERREUR;
+  $('ecranErreur').classList.toggle('visible', err && !urg);
+  if (err) {
+    $('eDetail').textContent = `${t.ech} échecs d'allumage consécutifs — source ${t.src === 'H2' ? 'hydrogène' : t.src === 'GPL' ? 'GPL' : t.src}`;
+    $('btnErreur').disabled = !($('eCoche').checked && S.pilote && !S.perdue);
+  }
+  /* --- Demande de prolongation --- */
+  const dem = t.e === E.DEMANDE;
+  $('ecranDemande').classList.toggle('visible', dem && !demandeMasquee && !urg);
+  if (dem) {
+    $('dMotif').textContent = MOTIFS[t.motif] || '—';
+    $('dRebours').textContent = duree(t.trep);
+    $('dN').textContent = t.nprol;
+    ['btnNMoins', 'btnNPlus', 'btnProlonger', 'btnTerminer'].forEach((id) => { $(id).disabled = !S.pilote || S.perdue; });
+    $('btnProlonger').textContent = `Prolonger de ${t.nprol} min`;
+  }
+}
+
+async function commandeRearm() {
+  if (!await confirmer('Réarmer après l\'urgence ?',
+    '<p>Le Mega vérifie lui-même qu\'aucune cause n\'est présente (fuite, arrêt d\'urgence, flamme) et refuse sinon.</p><p>Le séchoir revient à l\'<strong>attente</strong> : le cycle interrompu n\'est pas repris.</p>',
+    'Personne n\'est exposé, le local est ventilé.')) return;
+  const r = await envoyer('REARM');
+  $('uRetour').textContent = r.ok ? 'Réarmement accepté.' : 'Réarmement refusé : ' + (r.raison || '');
+  if (!r.ok) toast('Réarmement refusé : ' + (r.raison || ''), true);
+}
+async function commandeErreur() {
+  const choix = document.querySelector('input[name="choixErreur"]:checked').value;
+  const libelle = { REESSAYER: 'Réessayer l\'allumage', MANUEL: 'Passer en mode manuel', AUTO: 'Reprendre en automatique' }[choix];
+  if (!await confirmer(libelle + ' ?',
+    '<p>Même effet que le choix au pupitre suivi de OK.</p>' + (choix !== 'MANUEL' ? '<p class="avert">Une purge complète précède le nouvel allumage.</p>' : ''),
+    'J\'ai vérifié sur place l\'allumeur, l\'arrivée de gaz et la flamme.')) return;
+  const r = await envoyer('ERREUR ' + choix);
+  $('eRetour').textContent = r.ok ? 'Choix accepté : ' + r.val : 'Choix refusé : ' + (r.raison || '');
+}
+async function reglerN(sens) {
+  const t = S.tel;
+  if (!t) return;
+  let pas = 5;
+  const m = S.meta && S.meta.find((c) => c.k === 'prolong_defaut');
+  if (m) pas = +m.pas;
+  const r = await envoyer(`PROLONG ${Math.max(1, t.nprol + sens * pas)}`);
+  if (!r.ok) toast('Réglage refusé : ' + (r.raison || ''), true);
+}
+
+/* === CONFIRMATION EN DEUX TEMPS === */
+function confirmer(titre, html, caseTexte) {
+  return new Promise((resolve) => {
+    $('cfTitre').textContent = titre;
+    $('cfTexte').innerHTML = html;
+    const avecCase = !!caseTexte;
+    $('cfCaseL').classList.toggle('cache', !avecCase);
+    $('cfCase').checked = false;
+    $('cfCaseTexte').textContent = caseTexte || '';
+    $('cfOui').disabled = avecCase;
+    $('cfCase').onchange = () => { $('cfOui').disabled = !$('cfCase').checked; };
+    const fin = (v) => { $('voile').classList.remove('visible'); $('cfOui').onclick = $('cfNon').onclick = null; resolve(v); };
+    $('cfOui').onclick = () => fin(true);
+    $('cfNon').onclick = () => fin(false);
+    $('voile').classList.add('visible');
+    (avecCase ? $('cfCase') : $('cfOui')).focus();
+  });
+}
+
+/* === PARAMÈTRES : formulaire construit depuis GET META === */
+function construireParametres() {
+  const form = $('formParams');
+  form.textContent = '';
+  const groupes = [];
+  S.meta.forEach((c) => { if (!groupes.includes(c.g)) groupes.push(c.g); });
+  groupes.forEach((g) => {
+    const fs = document.createElement('fieldset');
+    const lg = document.createElement('legend');
+    lg.textContent = g;
+    fs.append(lg);
+    S.meta.filter((c) => c.g === g).forEach((c) => {
+      const div = document.createElement('div');
+      div.className = 'champ';
+      div.dataset.cle = c.k;
+      const id = 'p_' + c.k;
+      const lab = document.createElement('label');
+      lab.htmlFor = id;
+      lab.textContent = c.l;
+      if (c.s) { const s = document.createElement('span'); s.className = 'secu'; s.textContent = '⚠ sécurité'; lab.append(s); }
+      const saisie = document.createElement('div');
+      saisie.className = 'saisie';
+      let el;
+      if (c.ty === 'b' || c.ty === 'l') {
+        el = document.createElement('select');
+        c.o.split('|').forEach((nom, i) => {
+          const o = document.createElement('option');
+          o.value = String(+c.min + i);
+          o.textContent = nom;
+          el.append(o);
+        });
+      } else {
+        el = document.createElement('input');
+        el.type = 'number';
+        el.min = c.min; el.max = c.max; el.step = c.pas;
+        el.inputMode = c.ty === 'n' ? 'decimal' : 'numeric';
+      }
+      el.id = id;
+      el.addEventListener('input', () => marquerModifie(c.k));
+      el.addEventListener('change', () => marquerModifie(c.k));
+      const unite = document.createElement('span');
+      unite.className = 'unite';
+      unite.textContent = c.u;
+      saisie.append(el, unite);
+      const retour = document.createElement('div');
+      retour.className = 'retour';
+      retour.textContent = `de ${c.min} à ${c.max}${c.u ? ' ' + c.u : ''}, pas ${c.pas}`;
+      div.append(lab, saisie, retour);
+      fs.append(div);
+    });
+    form.append(fs);
+  });
+  majVerrouParametres();
+}
+
+function valeurAffichee(c, v) {
+  return c.ty === 'n' ? (+v).toFixed(1) : String(Math.round(+v));
+}
+function majParametresValeurs(forcer = false) {
+  if (!S.meta || !S.cfg) return;
+  S.meta.forEach((c) => {
+    const el = $('p_' + c.k);
+    if (!el) return;
+    const div = el.closest('.champ');
+    if (div.classList.contains('modifie') && !forcer) return;   // saisie en cours : on ne l'écrase pas
+    el.value = valeurAffichee(c, S.cfg[c.k]);
+    div.classList.remove('modifie');
+  });
+  majVerrouParametres();
+}
+function marquerModifie(cle) {
+  const c = S.meta.find((x) => x.k === cle);
+  const el = $('p_' + cle);
+  const div = el.closest('.champ');
+  const diff = S.cfg && el.value !== '' && Math.abs(+el.value - +S.cfg[cle]) > 1e-6;
+  div.classList.toggle('modifie', !!diff);
+  const r = div.querySelector('.retour');
+  r.className = 'retour';
+  r.textContent = diff ? `Mega : ${valeurAffichee(c, S.cfg[cle])} ${c.u} → à envoyer` : `de ${c.min} à ${c.max}${c.u ? ' ' + c.u : ''}, pas ${c.pas}`;
+  majVerrouParametres();
+}
+
+function droitsParametres() {
+  const t = S.tel;
+  if (!S.transport || !t || S.perdue) return { tout: false, tc: false, msg: 'Pas de liaison avec le Mega.' };
+  if (!S.pilote) return { tout: false, tc: false, msg: 'Lecture seule : un autre appareil pilote le séchoir.' };
+  if (t.e === E.ATTENTE || t.e === E.TERMINE) return { tout: true, tc: true, msg: '' };
+  if (t.e === E.MENU) return { tout: false, tc: false, msg: 'Le menu du pupitre local est ouvert : réglage au pupitre ou fermez le menu.' };
+  if (enCycleTc(t.e)) return { tout: false, tc: true, msg: 'Cycle en cours : seule la température cible est modifiable (enregistrée aussitôt).' };
+  return { tout: false, tc: false, msg: `Réglages impossibles en « ${NOMS_ETATS[t.e]} ».` };
+}
+function majVerrouParametres() {
+  const d = droitsParametres();
+  const v = $('verrouParams');
+  v.textContent = !S.meta ? (S.transport ? 'Lecture des paramètres…' : 'Connectez le Mega pour lire les paramètres.') : d.msg;
+  v.classList.toggle('cache', !!S.meta && !d.msg);
+  if (S.meta) S.meta.forEach((c) => { const el = $('p_' + c.k); if (el) el.disabled = !(d.tout || (d.tc && c.k === 't_cible')); });
+  const modifies = document.querySelectorAll('.champ.modifie').length;
+  $('btnEnvoyer').disabled = !(modifies && (d.tout || d.tc));
+  $('btnEnvoyer').textContent = modifies ? `Envoyer les modifications (${modifies})` : 'Envoyer les modifications';
+  $('btnSave').disabled = !d.tout;
+  $('btnRelire').disabled = !S.transport || S.perdue;
+  $('etatEeprom').textContent = S.nonSauve ? 'Modifications non enregistrées en EEPROM' : '';
+}
+
+async function envoyerParametres() {
+  const d = droitsParametres();
+  const liste = [...document.querySelectorAll('.champ.modifie')].map((div) => S.meta.find((c) => c.k === div.dataset.cle))
+    .filter((c) => d.tout || (d.tc && c.k === 't_cible'));
+  if (!liste.length) return;
+  const secu = liste.filter((c) => c.s);
+  const resume = '<ul>' + liste.map((c) => `<li>${c.l} : ${valeurAffichee(c, S.cfg[c.k])} → <strong>${$('p_' + c.k).value} ${c.u}</strong></li>`).join('') + '</ul>';
+  if (secu.length) {
+    if (!await confirmer('Modifier des paramètres de sécurité ?',
+      resume + '<p class="avert">Ces paramètres conditionnent la sécurité de la combustion (purge, allumage, pression, détection de fuite). Le Mega les garde dans leurs bornes.</p>',
+      'Je confirme ces réglages de sécurité.')) return;
+  }
+  for (const c of liste) {
+    const el = $('p_' + c.k);
+    const demande = el.value;
+    const r = await envoyer(`SET ${c.k} ${demande}`);
+    const div = el.closest('.champ');
+    const ret = div.querySelector('.retour');
+    if (r.ok) {
+      S.cfg[c.k] = +r.val;
+      div.classList.remove('modifie');
+      el.value = valeurAffichee(c, r.val);
+      const borne = Math.abs(+r.val - +demande) > 1e-6;
+      ret.className = 'retour ' + (borne ? 'borne' : 'ok');
+      ret.textContent = borne ? `Borné par le Mega : valeur retenue ${r.val} ${c.u}` : `Retenu par le Mega : ${r.val} ${c.u}`;
+      if (c.k !== 't_cible' || !enCycleTc(S.tel.e)) S.nonSauve = true;
+    } else {
+      ret.className = 'retour refus';
+      ret.textContent = 'Refusé : ' + (r.raison || '');
+    }
+  }
+  majVerrouParametres();
+}
+async function sauverEeprom() {
+  if (!await confirmer('Enregistrer en EEPROM ?', '<p>Les réglages actuels du Mega seront conservés après une coupure de courant.</p>')) return;
+  const r = await envoyer('SAVE');
+  if (r.ok) { S.nonSauve = false; toast('Paramètres enregistrés en EEPROM'); }
+  else toast('Enregistrement refusé : ' + (r.raison || ''), true);
+  majVerrouParametres();
+}
+async function relireParametres() {
+  document.querySelectorAll('.champ.modifie').forEach((d) => d.classList.remove('modifie'));
+  await envoyer('GET CFG');
+  majParametresValeurs(true);
+}
+
+/* === COURBES (canvas dessiné à la main, aucune bibliothèque) === */
+const COLONNES = ['heure', 'ms', 'etat', 'source', 'phase', 'palier_pct', 'tsec', 'tc', 't1', 't2', 't3', 'hsec', 'hfin', 'tamb', 'hamb',
+  'tcap', 'flamme', 'mq8', 'mq6', 'ph2', 'au', 'vh2', 'vbut', 'ev1', 'ev2', 'ev3', 'spk', 'buz', 'pwmp', 'pwmd', 'pwme', 'tcy'];
+function palierPct(t) {
+  if (t.src === 'SOLAIRE' || t.ph === 'PURGE' || t.ph === '0% (veille)' || !(t.vh2 || t.vbut)) return 0;
+  return [100, 67, 33, 0][t.pal];
+}
+/* Horodatage des trames : heure du PC ; en démo, temps simulé (×10). */
+let debutDemo = 0;
+function instantTrame(t) {
+  if (S.transport && S.transport.nom === 'DEMO') return debutDemo + t.ms;
+  return Date.now();
+}
+function memoriserTrame(t) {
+  const d = instantTrame(t);
+  S.trames.push({ d, t: [new Date(d).toISOString(), t.ms, t.etat, t.src, t.ph, palierPct(t), t.tsec, t.tc, t.t1, t.t2, t.t3,
+    t.hsec, t.hfin, t.tamb, t.hamb, t.tcap, t.fl, t.mq8, t.mq6, t.ph2, t.au, t.vh2, t.vbut, t.ev1, t.ev2, t.ev3, t.spk, t.buz,
+    t.pwmp, t.pwmd, t.pwme, t.tcy] });
+  if (S.trames.length > 86400) S.trames.splice(0, 3600);
+  $('nbTrames').textContent = `${S.trames.length} trame${S.trames.length > 1 ? 's' : ''}`;
+}
+let fenetre = 7200;
+function preparerCanvas(cv) {
+  const r = cv.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(r.width * dpr) || cv.height !== Math.round(r.height * dpr)) {
+    cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
+  }
+  const c = cv.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, r.width, r.height);
+  return { c, l: r.width, h: r.height };
+}
+function tracer(cv, series, opts) {
+  const { c, l, h } = preparerCanvas(cv);
+  const g = 44, d = 10, hh = 10, b = 24;
+  const fin = S.trames.length ? S.trames[S.trames.length - 1].d : Date.now();
+  const pts = S.trames.filter((p) => !fenetre || p.d >= fin - fenetre * 1000);
+  c.font = '12px system-ui, sans-serif';
+  c.fillStyle = '#3d4350';
+  if (pts.length < 2) { c.fillText('En attente de données…', g, h / 2); return; }
+  const t0 = pts[0].d, t1 = pts[pts.length - 1].d;
+  let min = opts.min, max = opts.max;
+  if (min === undefined || max === undefined) {
+    let lo = Infinity, hi = -Infinity;
+    pts.forEach((p) => series.forEach((s) => { const v = p.t[s.col]; if (Number.isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }));
+    min = Math.floor((lo - 2) / 5) * 5; max = Math.ceil((hi + 2) / 5) * 5;
+    if (max - min < 10) max = min + 10;
+  }
+  const X = (t) => g + ((t - t0) / Math.max(1, t1 - t0)) * (l - g - d);
+  const Y = (v) => hh + (1 - (v - min) / (max - min)) * (h - hh - b);
+  c.strokeStyle = '#e1e4ea'; c.lineWidth = 1;
+  const pasY = opts.pasY || Math.max(5, Math.round((max - min) / 5 / 5) * 5);
+  const graduations = opts.graduations || [];
+  if (!graduations.length) for (let v = Math.ceil(min / pasY) * pasY; v <= max; v += pasY) graduations.push(v);
+  for (const v of graduations) {
+    c.beginPath(); c.moveTo(g, Y(v)); c.lineTo(l - d, Y(v)); c.stroke();
+    c.fillText(String(v), 6, Y(v) + 4);
+  }
+  const nbX = Math.max(2, Math.floor((l - g) / 90));
+  for (let i = 0; i <= nbX; i++) {
+    const t = t0 + (i / nbX) * (t1 - t0);
+    c.fillText(new Date(t).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }), Math.min(X(t) - 14, l - 40), h - 6);
+  }
+  series.forEach((s) => {
+    c.strokeStyle = s.couleur; c.lineWidth = s.epais || 2; c.setLineDash(s.tirets || []);
+    c.beginPath();
+    let premier = true, prec = null;
+    pts.forEach((p) => {
+      const v = p.t[s.col];
+      if (!Number.isFinite(v)) { premier = true; return; }
+      const x = X(p.d), y = Y(v);
+      if (premier) { c.moveTo(x, y); premier = false; }
+      else if (s.marches) { c.lineTo(x, Y(prec)); c.lineTo(x, y); }
+      else c.lineTo(x, y);
+      prec = v;
+    });
+    c.stroke();
+  });
+  c.setLineDash([]);
+}
+function dessinerCourbes() {
+  const i = (n) => COLONNES.indexOf(n);
+  tracer($('gT'), [
+    { col: i('t1'), couleur: '#1d4ed8', epais: 1, tirets: [6, 4] },
+    { col: i('t2'), couleur: '#6d28d9', epais: 1, tirets: [6, 4] },
+    { col: i('t3'), couleur: '#1b7a3a', epais: 1.5, tirets: [6, 4] },
+    { col: i('tc'), couleur: '#0b0d12', epais: 1.5, tirets: [2, 3] },
+    { col: i('tsec'), couleur: '#c1121f', epais: 2.5 },
+  ], {});
+  tracer($('gH'), [
+    { col: i('hfin'), couleur: '#d9480f', epais: 2, tirets: [6, 4] },
+    { col: i('hsec'), couleur: '#1d4ed8', epais: 2.5 },
+  ], { min: 0, max: 100, pasY: 20 });
+  tracer($('gP'), [{ col: i('palier_pct'), couleur: '#d9480f', epais: 2.5, marches: true }], { min: 0, max: 100, graduations: [0, 33, 67, 100] });
+}
+
+function telecharger(nom, texte, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([texte], { type }));
+  a.download = nom;
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+function horodatage() { return new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-'); }
+function exporterCsv() {
+  if (!S.trames.length) { toast('Aucune trame reçue'); return; }
+  const lignes = [COLONNES.join(';')].concat(S.trames.map((p) => p.t.map((v) => typeof v === 'number' ? String(v).replace('.', ',') : v).join(';')));
+  telecharger(`sechoir_${horodatage()}.csv`, '﻿' + lignes.join('\r\n'), 'text/csv;charset=utf-8');
+}
+function exporterJournal() {
+  telecharger(`journal_sechoir_${horodatage()}.txt`, S.journal.map((e) => `${e.d.toISOString()}\t${e.type}\t${e.texte}`).join('\r\n'), 'text/plain;charset=utf-8');
+}
+
+/* === LIAISON : USB (Web Serial) === */
+async function connecterUsb() {
+  preparerSon();
+  if (!('serial' in navigator)) {
+    toast('Liaison USB indisponible : ouvrez cette page dans Chrome ou Edge sur ordinateur.', true);
+    return;
+  }
+  let port;
+  try { port = await navigator.serial.requestPort(); }
+  catch (e) { return; }                       // l'utilisateur a annulé
+  try { await port.open({ baudRate: 115200 }); }
+  catch (e) { toast('Ouverture du port impossible : ' + e.message, true); return; }
+  fermerTransport();
+  const encodeur = new TextEncoder();
+  let lecteur = null, actif = true, tampon = '';
+  S.transport = {
+    nom: 'USB',
+    envoyer: (l) => { const w = port.writable.getWriter(); w.write(encodeur.encode(l + '\n')).finally(() => w.releaseLock()); },
+    fermer: async () => { actif = false; try { if (lecteur) await lecteur.cancel(); } catch (e) { /* déjà fermé */ } try { await port.close(); } catch (e) { /* déjà fermé */ } },
+  };
+  S.pilote = true;
+  debutLiaison('Câble USB');
+  (async () => {
+    const decodeur = new TextDecoder();
+    while (actif && port.readable) {
+      lecteur = port.readable.getReader();
+      try {
+        for (;;) {
+          const { value, done } = await lecteur.read();
+          if (done) break;
+          tampon += decodeur.decode(value, { stream: true });
+          let i;
+          while ((i = tampon.indexOf('\n')) >= 0) { recevoirLigne(tampon.slice(0, i)); tampon = tampon.slice(i + 1); }
+          if (tampon.length > 8192) tampon = '';
+        }
+      } catch (e) {
+        if (actif) journaliser('sys', 'Erreur de lecture USB : ' + e.message);
+      } finally { lecteur.releaseLock(); }
+      if (!actif) break;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    if (actif) { journaliser('sys', 'Port USB fermé'); finLiaison(); }
+  })();
+  /* Le Mega redémarre à l'ouverture du port : description demandée après ~2 s. */
+  setTimeout(() => { if (S.transport && S.transport.nom === 'USB') demanderEtatComplet(); }, 2200);
+}
+
+/* === LIAISON : Wi-Fi (WebSocket de la passerelle ESP32) === */
+let ws = null, wsVoulu = false;
+function connecterWifi() {
+  preparerSon();
+  fermerTransport();
+  wsVoulu = true;
+  const url = `ws://${location.hostname || '192.168.4.1'}:${PORT_WS}/`;
+  ws = new WebSocket(url);
+  let tampon = '';
+  ws.onopen = () => {
+    S.transport = { nom: 'WIFI', envoyer: (l) => ws.send(l), fermer: () => { wsVoulu = false; ws.close(); } };
+    S.pilote = false;            // la passerelle annonce qui pilote ({"t":"pilote"})
+    debutLiaison('Wi-Fi (ESP32)');
+    demanderEtatComplet();
+  };
+  ws.onmessage = (ev) => {
+    tampon += typeof ev.data === 'string' ? ev.data : '';
+    if (!tampon.includes('\n')) { recevoirLigne(tampon); tampon = ''; return; }
+    let i;
+    while ((i = tampon.indexOf('\n')) >= 0) { recevoirLigne(tampon.slice(0, i)); tampon = tampon.slice(i + 1); }
+  };
+  ws.onclose = () => {
+    if (S.transport && S.transport.nom === 'WIFI') { journaliser('sys', 'Wi-Fi déconnecté'); finLiaison(); }
+    if (wsVoulu) setTimeout(() => { if (wsVoulu && !S.transport) connecterWifi(); }, 2000);
+  };
+  ws.onerror = () => { /* onclose suit */ };
+}
+
+/* === LIAISON : mode démo (séchoir simulé dans la page) === */
+function connecterDemo() {
+  preparerSon();
+  fermerTransport();
+  const simu = new SimuSechoir(recevoirLigne);
+  debutDemo = Date.now();
+  S.transport = { nom: 'DEMO', envoyer: (l) => setTimeout(() => simu.commande(l), 40), fermer: () => simu.arreter(), simu };
+  S.pilote = true;
+  debutLiaison('Démo');
+  $('avisDemo').classList.add('visible');
+  document.body.classList.add('demo');
+  demanderEtatComplet();
+}
+
+function debutLiaison(nom) {
+  S.derniereTrame = Date.now();
+  S.perdue = false;
+  S.meta = null; S.cfg = null; S.tel = null; S.etatPrec = null;
+  $('formParams').textContent = '';
+  journaliser('sys', 'Connecté : ' + nom);
+  majLiaison();
+}
+function finLiaison() {
+  S.transport = null;
+  S.attentes.forEach((a) => { clearTimeout(a.minuteur); a.resolve({ ok: false, raison: 'liaison fermée' }); });
+  S.attentes = [];
+  $('avisDemo').classList.remove('visible');
+  document.body.classList.remove('demo');
+  document.querySelectorAll('[data-demo]').forEach((b) => b.setAttribute('aria-pressed', 'false'));
+  majLiaison();
+  majCommande();
+  majVerrouParametres();
+}
+function fermerTransport() {
+  if (S.transport) { const t = S.transport; finLiaison(); try { t.fermer(); } catch (e) { /* déjà fermé */ } }
+}
+
+function majLiaison() {
+  const p = $('pLiaison');
+  const t = S.transport;
+  p.className = 'pastille' + (t ? (S.perdue ? ' perdue' : ' ok') : '');
+  p.textContent = !t ? 'Non connecté' : S.perdue ? 'Liaison perdue' : ({ USB: 'USB', WIFI: 'Wi-Fi', DEMO: 'Démo' })[t.nom] + ' · liaison OK';
+  $('alerteLiaison').classList.toggle('visible', !!t && S.perdue);
+  const pp = $('pPilote');
+  pp.classList.toggle('cache', !t);
+  pp.className = 'pastille' + (t ? (S.pilote ? ' ok' : ' lecture') : '') + (t ? '' : ' cache');
+  pp.textContent = S.pilote ? 'Pilote' : 'Lecture seule';
+  $('btnMain').classList.toggle('cache', !(t && t.nom === 'WIFI' && !S.pilote));
+  $('btnUsb').classList.toggle('cache', !!t);
+  $('btnDemo').classList.toggle('cache', !!t);
+  $('btnWifi').classList.toggle('cache', !!t || location.protocol === 'file:');
+  $('btnDeconnecter').classList.toggle('cache', !t);
+  if (!t) {
+    $('bandeau').className = 'bandeau etat-x';
+    $('bNom').textContent = '—';
+    $('bDetail').textContent = 'Pas de liaison avec le Mega';
+    $('bChrono').textContent = '';
+    ['ecranUrgence', 'ecranErreur', 'ecranDemande'].forEach((id) => $(id).classList.remove('visible'));
+  }
+}
+
+/* Surveillance : aucune trame pendant 3 s = liaison perdue (aucun effet sur le Mega). */
+setInterval(() => {
+  if (S.transport && !S.perdue && Date.now() - S.derniereTrame > DELAI_PERTE_MS) {
+    S.perdue = true;
+    journaliser('sys', 'Liaison perdue (aucune trame depuis 3 s)');
+    majLiaison(); majCommande(); majVerrouParametres();
+    if (S.tel) majEcrans(S.tel);
+  }
+}, 500);
+
+/* ===================================================================
+ * SIMULATEUR DU MODE DÉMO
+ * Reproduit le protocole et, en simplifié, la logique du programme du
+ * Mega (paliers 100/67/33/0 %, purge, allumage, veille, bascule, erreur,
+ * urgence, demande de prolongation). Temps accéléré ×10. Il sert à
+ * présenter et à essayer la page ; il ne remplace pas les tests du Mega.
+ * =================================================================== */
+/* Copie exacte de la réponse du Mega à GET META (générée depuis le programme). */
+const META_DEMO = [
+  {"k": "mode_auto", "l": "Mode de marche", "u": "", "ty": "b", "g": "Cycle", "s": 0, "min": 0, "max": 1, "pas": 1, "o": "MANUEL|AUTO"},
+  {"k": "choix_mode", "l": "Source (mode manuel)", "u": "", "ty": "l", "g": "Cycle", "s": 0, "min": 1, "max": 3, "pas": 1, "o": "SOLAIRE|H2|GPL"},
+  {"k": "t_cible", "l": "Température cible", "u": "°C", "ty": "n", "g": "Cycle", "s": 0, "min": 30.0, "max": 90.0, "pas": 1.0, "o": ""},
+  {"k": "t_init", "l": "Température init. (manuel)", "u": "°C", "ty": "n", "g": "Cycle", "s": 0, "min": 0.0, "max": 60.0, "pas": 1.0, "o": ""},
+  {"k": "h_initial", "l": "Humidité initiale", "u": "%", "ty": "n", "g": "Cycle", "s": 0, "min": 0.0, "max": 100.0, "pas": 1.0, "o": ""},
+  {"k": "h_produit", "l": "Humidité visée", "u": "%", "ty": "n", "g": "Cycle", "s": 0, "min": 1.0, "max": 50.0, "pas": 1.0, "o": ""},
+  {"k": "duree_max", "l": "Durée max de séchage", "u": "min", "ty": "e", "g": "Cycle", "s": 0, "min": 15, "max": 1440, "pas": 15, "o": ""},
+  {"k": "prolong_defaut", "l": "Prolongation proposée", "u": "min", "ty": "e", "g": "Cycle", "s": 0, "min": 5, "max": 720, "pas": 5, "o": ""},
+  {"k": "temps_reponse", "l": "Délai réponse opérateur", "u": "s", "ty": "e", "g": "Cycle", "s": 0, "min": 30, "max": 1800, "pas": 30, "o": ""},
+  {"k": "temps_min_fin", "l": "Durée min avant fin", "u": "min", "ty": "e", "g": "Cycle", "s": 0, "min": 0, "max": 1440, "pas": 15, "o": ""},
+  {"k": "hhyst", "l": "Hystérésis des paliers", "u": "°C", "ty": "n", "g": "Régulation", "s": 0, "min": 1.0, "max": 15.0, "pas": 0.5, "o": ""},
+  {"k": "periode_regul", "l": "Période de régulation", "u": "s", "ty": "e", "g": "Régulation", "s": 0, "min": 1, "max": 60, "pas": 1, "o": ""},
+  {"k": "regul_auto", "l": "Régulation des paliers", "u": "", "ty": "b", "g": "Régulation", "s": 0, "min": 0, "max": 1, "pas": 1, "o": "PALIER IMPOSE|AUTO"},
+  {"k": "palier_impose", "l": "Palier imposé", "u": "", "ty": "l", "g": "Régulation", "s": 0, "min": 0, "max": 2, "pas": 1, "o": "100%|67%|33%"},
+  {"k": "delta_t_sol", "l": "Tcap = Tamb + DeltaT", "u": "°C", "ty": "n", "g": "Solaire", "s": 0, "min": 0.0, "max": 60.0, "pas": 1.0, "o": ""},
+  {"k": "marge_sol", "l": "Solaire ON = Tc + marge", "u": "°C", "ty": "n", "g": "Solaire", "s": 0, "min": 0.0, "max": 20.0, "pas": 1.0, "o": ""},
+  {"k": "hyst_sol", "l": "Solaire OFF = ON - hyst", "u": "°C", "ty": "n", "g": "Solaire", "s": 0, "min": 1.0, "max": 20.0, "pas": 1.0, "o": ""},
+  {"k": "seuil_chaud", "l": "Repère CHAUD (Tsec >=)", "u": "°C", "ty": "n", "g": "Solaire", "s": 0, "min": 20.0, "max": 80.0, "pas": 1.0, "o": ""},
+  {"k": "temps_purge", "l": "Durée de purge", "u": "s", "ty": "e", "g": "Sécurité combustion", "s": 1, "min": 60, "max": 300, "pas": 10, "o": ""},
+  {"k": "temps_allumage", "l": "Délai max d'allumage", "u": "s", "ty": "e", "g": "Sécurité combustion", "s": 1, "min": 2, "max": 10, "pas": 1, "o": ""},
+  {"k": "press_h2_min", "l": "Pression H2 minimale", "u": "bar", "ty": "n", "g": "Sécurité combustion", "s": 1, "min": 0.5, "max": 8.0, "pas": 0.5, "o": ""},
+  {"k": "seuil_mq8", "l": "Seuil de fuite H2 (MQ-8)", "u": "/1023", "ty": "e", "g": "Sécurité combustion", "s": 1, "min": 100, "max": 900, "pas": 10, "o": ""},
+  {"k": "seuil_mq6", "l": "Seuil de fuite GPL (MQ-6)", "u": "/1023", "ty": "e", "g": "Sécurité combustion", "s": 1, "min": 100, "max": 900, "pas": 10, "o": ""},
+  {"k": "t_amb_fixe", "l": "T ambiante", "u": "", "ty": "b", "g": "Mode dégradé", "s": 0, "min": 0, "max": 1, "pas": 1, "o": "AUTO|FIXE"},
+  {"k": "t_amb_val", "l": "T ambiante fixe", "u": "°C", "ty": "n", "g": "Mode dégradé", "s": 0, "min": -10.0, "max": 55.0, "pas": 1.0, "o": ""},
+  {"k": "h_amb_fixe", "l": "H ambiante", "u": "", "ty": "b", "g": "Mode dégradé", "s": 0, "min": 0, "max": 1, "pas": 1, "o": "AUTO|FIXE"},
+  {"k": "h_amb_val", "l": "H ambiante fixe", "u": "%", "ty": "n", "g": "Mode dégradé", "s": 0, "min": 0.0, "max": 100.0, "pas": 1.0, "o": ""},
+  {"k": "h_sec_fixe", "l": "H séchoir", "u": "", "ty": "b", "g": "Mode dégradé", "s": 0, "min": 0, "max": 1, "pas": 1, "o": "AUTO|FIXE"},
+  {"k": "h_sec_val", "l": "H séchoir fixe", "u": "%", "ty": "n", "g": "Mode dégradé", "s": 0, "min": 0.0, "max": 100.0, "pas": 1.0, "o": ""},
+  {"k": "press_fixe", "l": "Pression H2", "u": "", "ty": "b", "g": "Mode dégradé", "s": 0, "min": 0, "max": 1, "pas": 1, "o": "AUTO|FIXE"},
+  {"k": "press_val", "l": "Pression H2 fixe", "u": "bar", "ty": "n", "g": "Mode dégradé", "s": 0, "min": 0.0, "max": 10.0, "pas": 0.5, "o": ""}
+];
+/* Valeurs par défaut du programme (réponse à GET CFG, EEPROM vierge). */
+const CFG_DEMO = {"mode_auto": 1, "choix_mode": 2, "t_cible": 55.0, "t_init": 25.0, "h_initial": 80.0, "h_produit": 10.0, "duree_max": 600, "prolong_defaut": 30, "temps_reponse": 300, "temps_min_fin": 120, "hhyst": 5.0, "periode_regul": 1, "regul_auto": 1, "palier_impose": 1, "delta_t_sol": 20.0, "marge_sol": 0.0, "hyst_sol": 5.0, "seuil_chaud": 40.0, "temps_purge": 120, "temps_allumage": 4, "press_h2_min": 2.0, "seuil_mq8": 350, "seuil_mq6": 350, "t_amb_fixe": 0, "t_amb_val": 25.0, "h_amb_fixe": 0, "h_amb_val": 40.0, "h_sec_fixe": 0, "h_sec_val": 60.0, "press_fixe": 0, "press_val": 5.0};
+
+class SimuSechoir {
+  constructor(sortie) {
+    this.sortie = sortie;
+    this.cfg = Object.assign({}, CFG_DEMO);
+    this.cfg.mode_auto = 1;
+    this.v = { soleil: false, pression: false, allumeur: false, fuite: false, au: false };
+    this.ms = 0; this.n = 0;
+    this.e = 0; this.src = 'SOLAIRE'; this.ph = 'PURGE'; this.pal = 0; this.raisonVeille = false;
+    this.tsec = 24; this.hsec = 88; this.tamb = 25; this.hamb = 35;
+    this.fl = false; this.flParasite = 0; this.urg = 0; this.choix = 0; this.ech = 0; this.pf = 0;
+    this.chCycle = 0; this.chPurge = 0; this.chAll = 0; this.chDem = 0; this.chProl = 0; this.chRef = 0; this.chPost = 0; this.post = false;
+    this.nprol = this.cfg.prolong_defaut; this.motif = 0; this.humAtteinte = false;
+    this.t1 = 35; this.t2 = 45; this.t3 = 55; this.chaud = false;
+    this.sorties = { vh2: 0, vbut: 0, ev1: 0, ev2: 0, ev3: 0, spk: 0, buz: 0, pwmp: 0, pwmd: 0, pwme: 0 };
+    this.seuils();
+    this.ligne('Sechoir hybride v2 : initialisation terminee');
+    this.pasTimer = setInterval(() => this.pas(1000), 100);         // 1 s simulée toutes les 100 ms
+    this.telTimer = setInterval(() => this.telemesure(), 1000);
+  }
+  arreter() { clearInterval(this.pasTimer); clearInterval(this.telTimer); }
+  ligne(l) { this.sortie(l); }
+  ack(cmd, ok, val = '', raison = '') { this.ligne(JSON.stringify({ t: 'ack', cmd, ok, val: String(val), raison })); }
+  changer(e) { if (e === this.e) return; this.e = e; this.ligne('FSM -> ' + ['ATTENTE', 'MENU', 'SOLAIRE', 'H2', 'GPL', 'DEMANDE', 'PROLONG.', 'TERMINE', 'ERREUR', 'URGENCE'][e]);
+    if (e === 7) this.chRef = this.ms; if (e === 6) this.chProl = this.ms; if (e === 5) { this.chDem = this.ms; this.nprol = this.cfg.prolong_defaut; } }
+  seuils() { const c = this.cfg, ti = c.t_init; if (c.t_cible <= ti + 3) { this.t1 = this.t2 = this.t3 = c.t_cible; } else { const dd = c.t_cible - ti; this.t1 = ti + dd / 3; this.t2 = ti + 2 * dd / 3; this.t3 = c.t_cible; } }
+  get ph2() { return this.v.pression ? 0.6 : 7.3; }
+  get tcap() { return (this.v.soleil ? 37 : this.tamb) + this.cfg.delta_t_sol; }
+  get son() { return this.cfg.t_cible + this.cfg.marge_sol; }
+  get soff() { return this.son - this.cfg.hyst_sol; }
+  get hfin() { return Math.min(95, this.cfg.h_produit + this.hamb); }
+  enCycle() { return [2, 3, 4, 5, 6].includes(this.e); }
+  causePresente() { return this.v.au || this.v.fuite || this.fl; }
+  fermerGaz() { Object.assign(this.sorties, { vh2: 0, vbut: 0, ev1: 0, ev2: 0, ev3: 0, spk: 0 }); }
+  purge(veille) { this.fermerGaz(); this.ph = 'PURGE'; this.raisonVeille = !!veille; this.chPurge = this.ms; }
+  demarrer() {
+    const c = this.cfg;
+    if (c.mode_auto) c.t_init = this.tsec;
+    this.seuils();
+    this.chaud = this.tsec >= c.seuil_chaud;
+    this.chCycle = this.ms; this.ech = 0; this.pf = 0; this.humAtteinte = false; this.post = false;
+    if (c.mode_auto) this.src = this.tcap >= (this.chaud ? this.soff : this.son) ? 'SOLAIRE' : (this.ph2 >= c.press_h2_min ? 'H2' : 'GPL');
+    else this.src = ['', 'SOLAIRE', 'H2', 'GPL'][c.choix_mode];
+    this.pal = !c.regul_auto ? c.palier_impose : (this.chaud ? this.palierDirect() : 0);
+    this.purge(this.pal === 3);
+    this.synchro();
+  }
+  palierDirect() { return this.tsec < this.t1 ? 0 : this.tsec < this.t2 ? 1 : this.tsec < this.t3 ? 2 : 3; }
+  synchro() { this.changer(this.src === 'SOLAIRE' ? 2 : this.src === 'H2' ? 3 : 4); }
+  urgence(cause) { if (this.e !== 9) { this.urg = cause; this.ligne('URGENCE : cause ' + cause); this.changer(9); } this.fermerGaz(); Object.assign(this.sorties, { pwmp: 255, pwmd: 0, pwme: 255, buz: 1 }); }
+  arbitrage() {
+    const c = this.cfg;
+    if (!c.mode_auto) return;
+    if (this.src !== 'SOLAIRE' && this.tcap >= this.son) { this.ligne('Solaire disponible : extinction normale + post-purge'); this.fermerGaz(); this.src = 'SOLAIRE'; this.post = true; this.chPost = this.ms; return; }
+    if (this.src === 'SOLAIRE' && this.tcap < (this.chaud ? this.soff : this.son)) { this.src = this.ph2 >= c.press_h2_min ? 'H2' : 'GPL'; this.post = false; this.ech = 0; this.pal = !c.regul_auto ? c.palier_impose : (this.chaud ? this.palierDirect() : 0); this.purge(this.pal === 3); return; }
+    if (this.src === 'H2' && this.ph2 < c.press_h2_min) { this.ligne('Pression H2 basse : bascule GPL, palier conserve'); this.purge(false); this.src = 'GPL'; this.ech = 0; return; }
+    if (this.src === 'GPL' && this.ph2 >= c.press_h2_min + 0.5) { this.ligne('Pression H2 retablie : bascule GPL -> H2, palier conserve'); this.purge(false); this.src = 'H2'; this.ech = 0; }
+  }
+  combustion() {
+    const c = this.cfg, s = this.sorties;
+    const ouvrir = () => { s.vh2 = this.src === 'H2' ? 1 : 0; s.vbut = this.src === 'GPL' ? 1 : 0; s.ev1 = this.pal === 0 ? 1 : 0; s.ev2 = this.pal <= 1 ? 1 : 0; s.ev3 = this.pal <= 2 ? 1 : 0; };
+    const pwmPal = () => { s.pwmp = 60; s.pwmd = [255, 210, 165][this.pal]; s.pwme = [200, 165, 130][this.pal]; };
+    if (this.ph === 'PURGE') {
+      this.fermerGaz(); Object.assign(s, { pwmp: 255, pwmd: 60, pwme: 200 });
+      if (this.ms - this.chPurge < c.temps_purge * 1000) return;
+      if (this.raisonVeille || this.pal === 3) { if (this.tsec >= this.t3 - c.hhyst / 2) return; this.pal = 2; this.raisonVeille = false; }
+      this.ph = 'ALLUMAGE'; this.chAll = this.ms; return;
+    }
+    if (this.ph === 'ALLUMAGE') {
+      ouvrir(); s.spk = 1; pwmPal();
+      if (this.fl) { s.spk = 0; this.ech = 0; this.ph = 'PAL'; }
+      else if (this.ms - this.chAll >= c.temps_allumage * 1000) {
+        this.ech++; this.ligne("Echec d'allumage");
+        if (this.ech >= 3) { this.ligne('Echecs d\'allumage repetes -> ERREUR_COMBUSTION'); this.fermerGaz(); this.choix = 0; s.buz = 1; this.changer(8); }
+        else this.purge(false);
+      }
+      return;
+    }
+    if (!this.fl) {
+      this.fermerGaz();
+      if (this.pf < 1) { this.pf++; this.ligne('Perte de flamme : fermeture immediate, relance apres purge'); this.purge(false); }
+      else { this.ligne('Perte de flamme repetee -> URGENCE'); this.urgence(4); }
+      return;
+    }
+    if (!c.regul_auto) this.pal = c.palier_impose;
+    else {
+      const dm = c.hhyst / 2, avant = this.pal;
+      if (this.pal === 0 && this.tsec >= this.t1 + dm) this.pal = 1;
+      else if (this.pal === 1) { if (this.tsec >= this.t2 + dm) this.pal = 2; else if (this.tsec < this.t1 - dm) this.pal = 0; }
+      else if (this.pal === 2) { if (this.tsec >= this.t3 + dm) this.pal = 3; else if (this.tsec < this.t2 - dm) this.pal = 1; }
+      if (this.pal === 3 && avant !== 3) { this.ligne('Consigne atteinte : coupure du bruleur (palier 0%)'); this.purge(true); return; }
+    }
+    ouvrir(); s.spk = 0; pwmPal();
+  }
+  regulation(sync) {
+    this.arbitrage();
+    if (sync) this.synchro();
+    if (this.src === 'SOLAIRE') {
+      this.fermerGaz(); this.ph = 'PURGE'; this.chPurge = this.ms;
+      if (this.post && this.ms - this.chPost < this.cfg.temps_purge * 1000) Object.assign(this.sorties, { pwmp: 255, pwmd: 60, pwme: 200 });
+      else { this.post = false; Object.assign(this.sorties, { pwmp: 0, pwmd: 220, pwme: 150 }); }
+    } else this.combustion();
+  }
+  conditionHumidite() { return this.ms - this.chCycle >= this.cfg.temps_min_fin * 60000 && this.hsec <= this.hfin; }
+  pas(dt) {
+    const c = this.cfg, s = this.sorties;
+    this.ms += dt;
+    /* Procédé : flamme si gaz ouvert et allumeur sain ; chambre du 1er ordre. */
+    const gaz = s.vh2 || s.vbut;
+    if (gaz && (s.spk || this.fl)) this.fl = !this.v.allumeur;
+    if (!gaz) this.fl = false;
+    const P = this.fl ? 5000 * (s.ev1 + s.ev2 + s.ev3) / 3 : 0;
+    const Psol = this.v.soleil && this.src === 'SOLAIRE' ? 1400 : 0;
+    this.tsec += dt / 1000 * (P + Psol - 10.2 * (this.tsec - this.tamb)) / 3.6e4;
+    if (this.enCycle() && this.tsec > 35) this.hsec = Math.max(8, this.hsec - dt / 1000 * 0.0009 * (this.tsec - 30));
+    const dm = c.hhyst / 2;
+    if (!this.chaud && this.tsec >= c.seuil_chaud + dm) this.chaud = true; else if (this.chaud && this.tsec < c.seuil_chaud - dm) this.chaud = false;
+    switch (this.e) {
+      case 0: this.fermerGaz(); Object.assign(s, { pwmp: 0, pwmd: 0, pwme: 0, buz: 0 }); break;
+      case 2: case 3: case 4: this.regulation(true); break;
+      case 5:
+        this.regulation(false);
+        if (!this.humAtteinte && this.conditionHumidite()) { this.humAtteinte = true; this.motif = 0; }
+        if (this.ms - this.chDem >= c.temps_reponse * 1000) { this.ligne('Pas de reponse operateur : sechage termine, bruleur a 0%'); this.fermerGaz(); this.changer(7); }
+        break;
+      case 6: this.regulation(false); break;
+      case 7: this.fermerGaz(); Object.assign(s, { pwmp: 0, pwmd: 0, pwme: 90 }); if (this.ms - this.chRef >= 300000) this.changer(0); break;
+      case 8: this.fermerGaz(); Object.assign(s, { pwmp: 255, pwmd: 0, pwme: 200, buz: 1 }); break;
+      case 9: this.urgence(this.urg); break;
+    }
+    if (this.v.au) { this.urgence(3); return; }
+    if (this.v.fuite) { this.urgence(1); return; }
+    if (this.e !== 9) {
+      if (this.fl && !(s.vh2 || s.vbut)) { if (!this.flParasite) this.flParasite = this.ms; else if (this.ms - this.flParasite >= 5000) { this.urgence(5); return; } } else this.flParasite = 0;
+    }
+    if (this.enCycle() && this.tsec >= 90) { this.ligne('Surchauffe chambre : arret du bruleur'); this.fermerGaz(); this.changer(7); return; }
+    if ([2, 3, 4].includes(this.e)) {
+      if (this.conditionHumidite()) { this.motif = 0; this.humAtteinte = true; this.changer(5); }
+      else if (this.ms - this.chCycle >= c.duree_max * 60000) { this.motif = 1; this.changer(5); }
+    } else if (this.e === 6) {
+      if (!this.humAtteinte && this.conditionHumidite()) { this.motif = 0; this.humAtteinte = true; this.changer(5); }
+      else if (this.ms - this.chProl >= this.nprol * 60000) { this.motif = 2; this.changer(5); }
+    }
+  }
+  telemesure() {
+    const c = this.cfg, s = this.sorties, r = (x) => Math.round(x * 10) / 10;
+    const ph = this.src === 'SOLAIRE' ? 'PURGE' : this.ph === 'PAL' ? ['100%', '67%', '33%', '0%'][this.pal] : (this.ph === 'PURGE' && this.raisonVeille ? '0% (veille)' : this.ph);
+    const reste = (dep, d) => Math.max(0, Math.round((d - (this.ms - dep)) / 1000));
+    let tpur = -1;
+    if (this.src === 'SOLAIRE') { if (this.post) tpur = reste(this.chPost, c.temps_purge * 1000); }
+    else if (this.ph === 'PURGE' && !this.raisonVeille && (this.enCycle() || this.e === 8)) tpur = reste(this.chPurge, c.temps_purge * 1000);
+    this.ligne(JSON.stringify({
+      t: 'tel', n: this.n++, ms: this.ms, lcd: 0, etat: ['ATTENTE', 'MENU', 'SOLAIRE', 'H2', 'GPL', 'DEMANDE', 'PROLONG.', 'TERMINE', 'ERREUR', 'URGENCE'][this.e], e: this.e,
+      src: this.src, ph, pal: this.pal, auto: c.mode_auto, reg: c.regul_auto, pimp: c.palier_impose, chaud: this.chaud ? 1 : 0,
+      tsec: r(this.tsec), tc: r(c.t_cible), t1: r(this.t1), t2: r(this.t2), t3: r(this.t3), hh: r(c.hhyst), hsec: r(this.hsec), hfin: r(this.hfin), hamb: r(this.hamb),
+      tamb: r(this.v.soleil ? 37 : this.tamb), tcap: r(this.tcap), tcapm: r(this.tsec + 8), son: r(this.son), soff: r(this.soff),
+      fl: this.fl ? 1 : 0, mq8: this.v.fuite ? 640 : 85, s8: c.seuil_mq8, mq6: 70, s6: c.seuil_mq6, ph2: this.ph2, ph2min: c.press_h2_min,
+      au: this.v.au ? 1 : 0, urg: this.urg, urgp: this.causePresente() ? 1 : 0, ...s, postp: this.post ? 1 : 0,
+      tcy: this.enCycle() || this.e === 8 ? Math.round((this.ms - this.chCycle) / 1000) : -1, tmax: c.duree_max * 60, tmf: c.temps_min_fin * 60,
+      trep: this.e === 5 ? reste(this.chDem, c.temps_reponse * 1000) : -1, trept: c.temps_reponse, nprol: this.nprol,
+      tprol: this.e === 6 ? Math.round((this.ms - this.chProl) / 1000) : -1, motif: this.motif, choix: this.choix, ech: this.ech, pf: this.pf,
+      tpur, tref: this.e === 7 ? reste(this.chRef, 300000) : -1, jp: 0, fta: c.t_amb_fixe, fha: c.h_amb_fixe, fhs: c.h_sec_fixe, fp: c.press_fixe,
+    }));
+  }
+  commande(ligne) {
+    const [cmd0, a1, a2] = ligne.trim().split(/\s+/);
+    const cmd = (cmd0 || '').toUpperCase();
+    const nomE = () => ['ATTENTE', 'MENU', 'SOLAIRE', 'H2', 'GPL', 'DEMANDE', 'PROLONG.', 'TERMINE', 'ERREUR', 'URGENCE'][this.e];
+    const refus = (c) => this.ack(c, false, '', 'sans effet en ' + nomE());
+    const c = this.cfg;
+    switch (cmd) {
+      case 'PING': this.ack('PING', true, 'sechoir-if 1 (demo)'); break;
+      case 'GET':
+        if ((a1 || '').toUpperCase() === 'META') { this.ack('GET', true, 'META'); this.ligne(JSON.stringify({ t: 'meta', version: 'sechoir-if 1', champs: META_DEMO })); }
+        else { this.ack('GET', true, 'CFG'); this.ligne(JSON.stringify(Object.assign({ t: 'cfg' }, c))); }
+        break;
+      case 'SET': {
+        const m = META_DEMO.find((x) => x.k === a1);
+        const v = Number(a2);
+        if (!m) { this.ack('SET', false, '', 'cle inconnue'); break; }
+        if (a2 === undefined || !Number.isFinite(v)) { this.ack('SET', false, '', 'valeur invalide'); break; }
+        const libre = this.e === 0 || this.e === 7, tc = [2, 3, 4, 6].includes(this.e) && a1 === 't_cible';
+        if (!libre && !tc) { this.ack('SET', false, '', this.enCycle() ? (a1 === 't_cible' ? "repondre d'abord a la demande" : 'en cycle, seule t_cible se regle') : 'sans effet en ' + nomE()); break; }
+        let x = m.ty === 'n' ? v : Math.round(v);
+        if (m.ty === 'l' && (x < m.min || x > m.max)) x = a1 === 'choix_mode' ? 2 : 1;
+        else if (m.ty === 'b') x = v !== 0 ? 1 : 0;
+        else x = Math.min(m.max, Math.max(m.min, x));
+        c[a1] = x; this.seuils();
+        this.ack('SET', true, m.ty === 'n' ? x.toFixed(1) : String(x), a1);
+        break;
+      }
+      case 'SAVE': (this.e === 0 || this.e === 7) ? this.ack('SAVE', true) : refus('SAVE'); break;
+      case 'START': if ([0, 1, 7].includes(this.e)) { this.demarrer(); this.ack('START', true, nomE()); } else refus('START'); break;
+      case 'STOP':
+        if (this.e === 9) { this.ack('STOP', false, '', 'urgence prioritaire'); break; }
+        if (this.enCycle() || this.e === 8) { this.fermerGaz(); this.sorties.buz = 0; this.changer(7); this.ack('STOP', true, nomE()); } else refus('STOP');
+        break;
+      case 'TERMINER': if (this.e === 5) { this.fermerGaz(); this.changer(7); this.ack('TERMINER', true, nomE()); } else refus('TERMINER'); break;
+      case 'PROLONG':
+        if (this.e !== 5) { refus('PROLONG'); break; }
+        if ((a1 || '').toUpperCase() === 'OK') { this.ligne('Prolongation acceptee : ' + this.nprol); this.changer(6); this.ack('PROLONG', true, nomE()); break; }
+        if (!Number.isFinite(Number(a1))) { this.ack('PROLONG', false, '', 'PROLONG <min> ou PROLONG OK'); break; }
+        this.nprol = Math.min(720, Math.max(5, Math.round(Number(a1)))); this.chDem = this.ms; this.ack('PROLONG', true, this.nprol);
+        break;
+      case 'ERREUR': {
+        if (this.e !== 8) { refus('ERREUR'); break; }
+        const ch = { REESSAYER: 0, MANUEL: 1, AUTO: 2 }[(a1 || '').toUpperCase()];
+        if (ch === undefined) { this.ack('ERREUR', false, '', 'REESSAYER, MANUEL ou AUTO'); break; }
+        this.sorties.buz = 0;
+        if (ch === 1) { c.mode_auto = 0; this.changer(0); }
+        else { if (ch === 2) c.mode_auto = 1; this.ech = 0; this.purge(false); this.synchro(); }
+        this.ack('ERREUR', true, nomE());
+        break;
+      }
+      case 'REARM':
+        if (this.e !== 9) { refus('REARM'); break; }
+        if (this.causePresente()) { this.ligne('Rearmement refuse : cause toujours presente'); this.ack('REARM', false, '', this.v.au ? "arret d'urgence enfonce : le deverrouiller" : this.v.fuite ? 'fuite H2 : MQ-8 640 > ' + c.seuil_mq8 : 'flamme encore detectee'); break; }
+        this.sorties.buz = 0; this.pal = 0; this.ph = 'PURGE'; this.urg = 0; this.changer(0); this.ack('REARM', true, nomE());
+        break;
+      case 'PILOTE': this.ack('PILOTE', true, '', 'gere par la passerelle ESP32'); break;
+      default: this.ack(cmd.slice(0, 9) || '?', false, '', 'commande inconnue');
+    }
+  }
+  basculer(nom) {
+    if (nom === 'fin') { this.chCycle = this.ms - this.cfg.duree_max * 60000; return; }
+    this.v[nom] = !this.v[nom];
+    return this.v[nom];
+  }
+}
+
+/* === ÉVÉNEMENTS === */
+let ongletActif = 'tableau';
+document.querySelectorAll('.onglets button').forEach((b) => b.addEventListener('click', () => {
+  ongletActif = b.dataset.onglet;
+  document.querySelectorAll('.onglets button').forEach((x) => x.setAttribute('aria-selected', String(x === b)));
+  document.querySelectorAll('.panneau').forEach((p) => p.classList.toggle('actif', p.id === 'o-' + ongletActif));
+  if (ongletActif === 'courbes') dessinerCourbes();
+}));
+document.querySelectorAll('.segment button').forEach((b) => b.addEventListener('click', () => {
+  fenetre = +b.dataset.fenetre;
+  document.querySelectorAll('.segment button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+  dessinerCourbes();
+}));
+document.querySelectorAll('[data-filtre]').forEach((c) => c.addEventListener('change', () => { filtresJournal[c.dataset.filtre] = c.checked; redessinerJournal(); }));
+document.querySelectorAll('[data-demo]').forEach((b) => b.addEventListener('click', () => {
+  const simu = S.transport && S.transport.simu;
+  if (!simu) return;
+  const etat = simu.basculer(b.dataset.demo);
+  if (etat !== undefined) b.setAttribute('aria-pressed', String(etat));
+}));
+$('btnUsb').addEventListener('click', connecterUsb);
+$('btnWifi').addEventListener('click', connecterWifi);
+$('btnDemo').addEventListener('click', connecterDemo);
+$('btnDeconnecter').addEventListener('click', () => { wsVoulu = false; journaliser('sys', 'Déconnexion demandée'); fermerTransport(); });
+$('btnMain').addEventListener('click', () => envoyer('PILOTE'));
+$('btnStop').addEventListener('click', commandeStop);
+$('btnStart').addEventListener('click', commandeStart);
+$('btnTcMoins').addEventListener('click', () => reglerTc(-1));
+$('btnTcPlus').addEventListener('click', () => reglerTc(+1));
+$('btnOuvrirDemande').addEventListener('click', () => { demandeMasquee = false; if (S.tel) majEcrans(S.tel); });
+$('btnPlusTard').addEventListener('click', () => { demandeMasquee = true; if (S.tel) majEcrans(S.tel); });
+$('btnNMoins').addEventListener('click', () => reglerN(-1));
+$('btnNPlus').addEventListener('click', () => reglerN(+1));
+$('btnProlonger').addEventListener('click', async () => { const r = await envoyer('PROLONG OK'); $('dRetour').textContent = r.ok ? '' : 'Refusé : ' + (r.raison || ''); });
+$('btnTerminer').addEventListener('click', async () => {
+  if (!await confirmer('Terminer le séchage ?', '<p>Le brûleur est coupé et le séchoir passe en refroidissement.</p>')) return;
+  const r = await envoyer('TERMINER');
+  $('dRetour').textContent = r.ok ? '' : 'Refusé : ' + (r.raison || '');
+});
+$('uCoche').addEventListener('change', () => { if (S.tel) majEcrans(S.tel); });
+$('eCoche').addEventListener('change', () => { if (S.tel) majEcrans(S.tel); });
+$('btnRearm').addEventListener('click', commandeRearm);
+$('btnErreur').addEventListener('click', commandeErreur);
+$('btnEnvoyer').addEventListener('click', envoyerParametres);
+$('btnSave').addEventListener('click', sauverEeprom);
+$('btnRelire').addEventListener('click', relireParametres);
+$('btnCsv').addEventListener('click', exporterCsv);
+$('btnJournal').addEventListener('click', exporterJournal);
+window.addEventListener('resize', () => { if (ongletActif === 'courbes') dessinerCourbes(); });
+
+/* Hauteur réelle de la barre de liaison (et de la barre démo) : les onglets
+ * et les écrans d'alarme commencent juste en dessous, quel que soit l'écran. */
+function majHauteurs() {
+  const hb = document.querySelector('.barre').offsetHeight;
+  const demo = $('avisDemo');
+  const hd = demo.classList.contains('visible') ? demo.offsetHeight : 0;
+  document.documentElement.style.setProperty('--haut-barre', hb + 'px');
+  document.documentElement.style.setProperty('--haut-ecran', (hb + hd) + 'px');
+}
+if (window.ResizeObserver) {
+  const ro = new ResizeObserver(majHauteurs);
+  ro.observe(document.querySelector('.barre'));
+  ro.observe($('avisDemo'));
+}
+window.addEventListener('resize', majHauteurs);
+
+/* === DÉMARRAGE : servie par l'ESP32 -> Wi-Fi automatique ; ouverte en local -> boutons === */
+majLiaison();
+majCommande();
+majHauteurs();
+if (location.protocol === 'http:' || location.protocol === 'https:') {
+  if (location.hostname && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') connecterWifi();
+}
+if (!('serial' in navigator)) $('btnUsb').title = 'Web Serial : Chrome ou Edge sur ordinateur';
+/* Accès de test (banc automatique) */
+window.__sechoir = { recevoirLigne, S, connecterWifi };
+</script>
+</body>
+</html>

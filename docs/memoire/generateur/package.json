@@ -1,0 +1,8 @@
+{
+  "name": "memoire-sechoir-hybride",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Génère docs/memoire/Commande_Sechoir_Solaire_Hybride.docx",
+  "scripts": { "build": "node build.js" },
+  "dependencies": { "docx": "^9.7.1" }
+}
